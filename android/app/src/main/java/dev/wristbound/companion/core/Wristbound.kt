@@ -17,6 +17,10 @@ import dev.wristbound.companion.pebble.Text
 import dev.wristbound.companion.pebble.WatchCodec
 import dev.wristbound.companion.pebble.WatchCommand
 import dev.wristbound.companion.pebble.WatchLink
+import dev.wristbound.companion.pebble.WatchStream
+import dev.wristbound.companion.playback.AudioDecoder
+import dev.wristbound.companion.playback.PcmConverter
+import kotlinx.coroutines.withContext
 import dev.wristbound.companion.playback.PlaybackController
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -75,6 +79,11 @@ class Wristbound private constructor(context: Context) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Reply>?) = size > 128
     }
     private val inboxMutex = Mutex()
+    private val watchStream = WatchStream(scope, { watch.send(it) }) { id, reason -> Log.i(TAG, "watch speaker $id: $reason") }
+    /** Watch-speaker PCM for the last few replies, so Replay does not decode again. */
+    private val watchPcm = object : LinkedHashMap<String, Pair<ByteArray, String>>(4, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<ByteArray, String>>?) = size > 2
+    }
     private val pollMutex = Mutex()
     private var monitor: Job? = null
     private val alerts = ReplyAlerts(state, ::alertPolicy) { deliverAlert(it) }
@@ -149,6 +158,7 @@ class Wristbound private constructor(context: Context) {
         if (watchOpen == open) return
         watchOpen = open
         Log.i(TAG, if (open) "watchapp open" else "watchapp closed")
+        if (!open) scope.launch { watchStream.stop() }
         updateMonitoring()
     }
 
@@ -186,6 +196,9 @@ class Wristbound private constructor(context: Context) {
                 settings.includeTelegram = cmd.includeTelegram
                 pushAudio(refresh = true)
             }
+            is WatchCommand.PlayOnWatch -> playOnWatch(cmd.sessionId, cmd.messageId, cmd.chunkBytes)
+            is WatchCommand.AudioPull -> watchStream.pull(cmd.messageId, cmd.offset, cmd.length)
+            is WatchCommand.AudioStop -> watchStream.stop(cmd.messageId)
             is WatchCommand.OpenReply -> {
                 state.markHeard(cmd.messageId)
                 sendReplyToWatch(cmd.sessionId, cmd.messageId, requested = true)
@@ -597,6 +610,52 @@ class Wristbound private constructor(context: Context) {
         pruneAudio()
         if (clip != null) playback.playFile(messageId, clip.first.file, allowSpeaker, clip.second)
         else playback.play(messageId, Text.forSpeech(reply.text), allowSpeaker)
+    }
+
+    // -- watch speaker ----------------------------------------------------------------------------
+
+    /**
+     * Play one exact reply on the watch's own speaker. The watch has no codec, so the reply's
+     * Hermes audio is decoded here and sent as 8 kHz PCM that the watch pulls as it has room.
+     * Only that reply's own audio is used, or Hermes' voice reading it again (labelled so);
+     * never the phone or headphones, and a failure is reported to the watch, not rerouted.
+     */
+    private suspend fun playOnWatch(sessionId: String, messageId: String, chunk: Int) {
+        suspend fun fail(reason: String) {
+            Log.i(TAG, "watch speaker $messageId: $reason")
+            watch.send(WatchCodec.audioStart(messageId, 0, Protocol.PcmFormat.PCM_8KHZ_8BIT, reason))
+        }
+        val cached = synchronized(watchPcm) { watchPcm[messageId] }
+        val (pcm, label) = cached ?: run {
+            val api = api() ?: return fail("Set up phone app")
+            val reply = replyFor(sessionId, messageId) ?: return fail("Reply not found")
+            var source: Pair<AudioClip, String>? = reply.audio.firstNotNullOfOrNull { path ->
+                runCatching { api.fetchAudio(path, audioDir) }.onFailure { Log.d(TAG, "audio fetch failed: ${it.message}") }.getOrNull()
+            }?.let { it to "Hermes audio" }
+            if (source == null && reply.audio.isEmpty() && settings.hermesVoice) {
+                source = runCatching { api.speak(Text.forSpeech(reply.text), messageId, audioDir) }
+                    .onFailure { Log.d(TAG, "Hermes voice failed: ${it.message}") }.getOrNull()
+                    ?.let { it to "Hermes voice, read again" }
+            }
+            if (source == null) {
+                return fail(if (reply.audio.isEmpty()) "No Hermes audio for this reply" else "Could not get the audio")
+            }
+            pruneAudio()
+            val converted = try {
+                withContext(Dispatchers.Default) {
+                    val decoded = AudioDecoder.decode(source.first.file)
+                    val seconds = decoded.samples.size / decoded.channels / decoded.sampleRate
+                    val suffix = if (seconds >= PcmConverter.MAX_SECONDS) " (first 2 min)" else ""
+                    PcmConverter.forWatch(decoded.samples, decoded.sampleRate, decoded.channels) to source.second + suffix
+                }
+            } catch (e: IOException) {
+                return fail("Cannot convert this audio")
+            }
+            synchronized(watchPcm) { watchPcm[messageId] = converted }
+            converted
+        }
+        Log.i(TAG, "watch speaker $messageId: ${pcm.size} bytes, $label")
+        watchStream.start(messageId, pcm, chunk, label)
     }
 
     private suspend fun replyFor(sessionId: String, messageId: String): Reply? {

@@ -48,6 +48,22 @@ class WatchCodecTest {
     }
 
     @Test
+    fun decodesWatchSpeakerCommands() {
+        fun u32(v: Int) = PebbleDictionaryItem.UInt32(v.toUInt())
+        assertEquals(
+            WatchCommand.PlayOnWatch("s1", "7", 4000),
+            WatchCodec.decode(mapOf(Key.CMD to u8(13), Key.SESSION_ID to t("s1"), Key.MESSAGE_ID to t("7"),
+                Key.TEXT_BUDGET to PebbleDictionaryItem.UInt16(4000.toUShort()))),
+        )
+        assertEquals(
+            WatchCommand.AudioPull("7", 8192, 40960),
+            WatchCodec.decode(mapOf(Key.CMD to u8(14), Key.MESSAGE_ID to t("7"), Key.OFFSET to u32(8192), Key.LENGTH to u32(40960))),
+        )
+        assertNull(WatchCodec.decode(mapOf(Key.CMD to u8(14), Key.MESSAGE_ID to t("7"))))
+        assertEquals(WatchCommand.AudioStop("7"), WatchCodec.decode(mapOf(Key.CMD to u8(15), Key.MESSAGE_ID to t("7"))))
+    }
+
+    @Test
     fun audioPageCarriesTheReplyAndItsTime() {
         val item = dev.wristbound.companion.core.AudioItem("s1", "7", "Groceries", "Here is the list", 1_792_700_000.5, telegram = true)
         val page = WatchCodec.audioPage(2, 5, item, isNew = true)
@@ -77,9 +93,9 @@ class WatchCodecTest {
     fun messageKeysMatchWatchPackageOrder() {
         // watch/package.json messageKeys, in order; the SDK numbers them from 10000.
         val order = listOf("Cmd", "Type", "ProtoVersion", "TextBudget", "SessionId", "Title", "Flags", "Index",
-            "Total", "MessageId", "Role", "Text", "State", "Detail", "Filter", "Route", "Time")
+            "Total", "MessageId", "Role", "Text", "State", "Detail", "Filter", "Route", "Time", "Data", "Offset", "Length")
         val keys = listOf(Key.CMD, Key.TYPE, Key.PROTO_VERSION, Key.TEXT_BUDGET, Key.SESSION_ID, Key.TITLE, Key.FLAGS,
-            Key.INDEX, Key.TOTAL, Key.MESSAGE_ID, Key.ROLE, Key.TEXT, Key.STATE, Key.DETAIL, Key.FILTER, Key.ROUTE, Key.TIME)
+            Key.INDEX, Key.TOTAL, Key.MESSAGE_ID, Key.ROLE, Key.TEXT, Key.STATE, Key.DETAIL, Key.FILTER, Key.ROUTE, Key.TIME, Key.DATA, Key.OFFSET, Key.LENGTH)
         // Gradle runs unit tests from the module directory (android/app).
         val pkg = java.io.File("../../watch/package.json").readText()
         val declared = Regex(""""messageKeys":\s*\[([^\]]*)]""").find(pkg)!!.groupValues[1]

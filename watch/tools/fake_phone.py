@@ -11,17 +11,20 @@ It speaks the AppMessage protocol from docs/PROTOCOL.md with canned data: no Her
 The emulator's pypkjs port is read from pebble-tool's state file (/tmp/pb-emulator.json).
 """
 import json
+import math
+import queue
 import sys
+import threading
 import time
 import uuid
 
 from libpebble2.communication import PebbleConnection
 from libpebble2.communication.transports.websocket import WebsocketTransport
-from libpebble2.services.appmessage import AppMessageService, CString, Uint8, Uint32
+from libpebble2.services.appmessage import AppMessageService, ByteArray, CString, Uint8, Uint32
 
 APP_UUID = uuid.UUID("094c587f-8bd7-4377-aa6b-ff55eb724b27")
 KEYS = ["Cmd", "Type", "ProtoVersion", "TextBudget", "SessionId", "Title", "Flags", "Index", "Total",
-        "MessageId", "Role", "Text", "State", "Detail", "Filter", "Route", "Time"]
+        "MessageId", "Role", "Text", "State", "Detail", "Filter", "Route", "Time", "Data", "Offset", "Length"]
 K = {name: 10000 + i for i, name in enumerate(KEYS)}
 NAMES = {v: k for k, v in K.items()}
 
@@ -43,6 +46,9 @@ AUDIO = [
     ("api_1", "4", "Watch chat", "Done. I'll remind you at 4:00pm to leave for the dentist.", 50, 0),
     ("cli_1", "17", "Repo cleanup", "Summary of the cleanup: 12 branches removed, 3 kept.", 60 * 26, 0),
 ]
+# Watch speaker: a 4 second 440 Hz tone as 8 kHz signed 8-bit PCM. Reply "17" has no audio, to show the
+# failure path.
+TONE = bytes(int(100 * math.sin(2 * math.pi * 440 * i / 8000)) & 0xFF for i in range(8000 * 4))
 
 
 def main(platform):
@@ -58,8 +64,10 @@ def main(platform):
         for name, value in fields.items():
             if isinstance(value, str):
                 out[K[name]] = CString(value)
+            elif isinstance(value, bytes):
+                out[K[name]] = ByteArray(value)
             else:
-                out[K[name]] = Uint32(value) if name == "Time" else Uint8(value)
+                out[K[name]] = Uint32(value) if name in ("Time", "Offset", "Length") else Uint8(value)
         svc.send_message(APP_UUID, out)
         time.sleep(0.25)
 
@@ -82,9 +90,38 @@ def main(platform):
             send({"Type": 8, "Index": i, "Total": len(rows), "SessionId": sid, "MessageId": mid, "Title": title,
                   "Text": preview, "Flags": flags, "Time": int(time.time()) - ago * 60})
 
+    # Speaker streaming runs off the receive thread, so the watch's acks keep flowing while chunks go out.
+    stream = {"id": None, "chunk": 1000, "sent": 0, "allowed": 0}
+    jobs = queue.Queue()
+
+    def streamer():
+        while True:
+            job = jobs.get()
+            if job[0] == "start":
+                _, mid, chunk = job
+                # The emulator's serial link garbles packets of a few KB, so stay well under the watch's limit.
+                stream.update(id=mid, chunk=min(chunk, 1000), sent=0, allowed=0)
+                time.sleep(1.0)  # "decoding"
+                if mid == "17":
+                    send({"Type": 9, "MessageId": mid, "Length": 0, "State": 0,
+                          "Detail": "No Hermes audio for this reply"})
+                    stream["id"] = None
+                else:
+                    send({"Type": 9, "MessageId": mid, "Length": len(TONE), "State": 0, "Detail": "Hermes audio"})
+            elif job[0] == "pull" and job[1] == stream["id"]:
+                stream["allowed"] = max(stream["allowed"], min(job[2] + job[3], len(TONE)))
+                while stream["id"] == job[1] and stream["sent"] < stream["allowed"]:
+                    end = min(stream["sent"] + stream["chunk"], stream["allowed"])
+                    send({"Type": 10, "MessageId": job[1], "Offset": stream["sent"], "Data": TONE[stream["sent"]:end]})
+                    stream["sent"] = end
+            elif job[0] == "stop" and job[1] in (stream["id"], ""):
+                stream["id"] = None
+
+    threading.Thread(target=streamer, daemon=True).start()
+
     def on_message(tid, app, data):
         named = {NAMES.get(k, k): v for k, v in data.items()}
-        print("watch ->", named, flush=True)
+        print("watch ->", {k: v for k, v in named.items() if k != "Data"}, flush=True)
         cmd = named.get("Cmd")
         if cmd == 1 or cmd == 2:
             send_sessions(named.get("Filter", 1))
@@ -110,6 +147,13 @@ def main(platform):
                 send({"Type": 5, "MessageId": named["MessageId"], "State": 1, "Detail": "Playing on speaker"})
             else:
                 send({"Type": 5, "MessageId": named["MessageId"], "State": 3, "Detail": "No headphones"})
+        elif cmd == 13:
+            jobs.put(("start", named["MessageId"], named.get("TextBudget", 1000)))
+        elif cmd == 14:
+            jobs.put(("pull", named["MessageId"], named.get("Offset", 0), named.get("Length", 0)))
+        elif cmd == 15:
+            stream["id"] = None
+            jobs.put(("stop", named.get("MessageId", "")))
         elif cmd in (7, 10):
             send({"Type": 5, "MessageId": "", "State": 2 if cmd == 7 else 0, "Detail": ""})
 

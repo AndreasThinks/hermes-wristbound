@@ -1,6 +1,7 @@
 #include <pebble.h>
 #include "comm.h"
 #include "model.h"
+#include "speaker.h"
 #include "ui.h"
 
 static void prv_init(void) {
@@ -16,11 +17,13 @@ static void prv_init(void) {
     .audio_changed = ui_audio_changed,
     .reply_received = ui_reply_received,
   });
+  wspk_init(ui_playback_changed);
   g_model.sessions_loading = true;
   comm_hello();
 }
 
 static void prv_deinit(void) {
+  wspk_deinit();
   comm_deinit();
   ui_deinit();
   model_deinit();

@@ -40,7 +40,10 @@
       "Detail",
       "Filter",
       "Route",
-      "Time"
+      "Time",
+      "Data",
+      "Offset",
+      "Length"
     ],
     "resources": {
       "media": []
