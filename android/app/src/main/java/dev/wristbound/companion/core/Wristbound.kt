@@ -8,6 +8,7 @@ import dev.wristbound.companion.hermes.DashboardClient
 import dev.wristbound.companion.hermes.HermesApi
 import dev.wristbound.companion.hermes.HermesHttpException
 import dev.wristbound.companion.hermes.HermesMessage
+import dev.wristbound.companion.hermes.HermesProtocolException
 import dev.wristbound.companion.hermes.HermesSession
 import dev.wristbound.companion.notify.Notifier
 import dev.wristbound.companion.pebble.Protocol
@@ -16,6 +17,7 @@ import dev.wristbound.companion.pebble.WatchCodec
 import dev.wristbound.companion.pebble.WatchCommand
 import dev.wristbound.companion.pebble.WatchLink
 import dev.wristbound.companion.playback.PlaybackController
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,7 +39,13 @@ class Wristbound private constructor(context: Context) {
     private val app = context.applicationContext
     val settings = Settings(app)
     val state = LocalState(app)
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /**
+     * Every watch command, turn and poll runs here. Expected failures are handled where they
+     * happen; this handler only stops an unexpected one from taking the whole companion down.
+     */
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e ->
+        Log.e(TAG, "unhandled error in companion work", e)
+    })
     private val watch = WatchLink(app)
     private val notifier = Notifier(app)
     private val playback = PlaybackController(app) { id, s, detail -> onPlaybackState(id, s, detail) }
@@ -140,6 +148,10 @@ class Wristbound private constructor(context: Context) {
         } catch (e: HermesHttpException) {
             watch.send(WatchCodec.status(if (e.isAuth) Protocol.Conn.AUTH_ERROR else Protocol.Conn.ERROR, e.message.orEmpty()))
             sendSessionPages(state.loadSessions()?.sessions.orEmpty())
+        } catch (e: HermesProtocolException) {
+            Log.w(TAG, "unreadable session list", e)
+            watch.send(WatchCodec.status(Protocol.Conn.ERROR, "Hermes sent bad data"))
+            sendSessionPages(state.loadSessions()?.sessions.orEmpty())
         } catch (e: IOException) {
             val cached = state.loadSessions()
             watch.send(WatchCodec.status(Protocol.Conn.OFFLINE, if (cached != null) "Offline - cached" else "Hermes offline"))
@@ -167,6 +179,10 @@ class Wristbound private constructor(context: Context) {
             val raw = api.recentMessages(sessionId, 40)
             rememberReplies(raw)
             SessionMapper.watchMessages(raw, settings.toolActivity).also { state.saveMessages(sessionId, title, it) }
+        } catch (e: HermesProtocolException) {
+            Log.w(TAG, "unreadable history", e)
+            watch.send(WatchCodec.status(Protocol.Conn.ERROR, "Hermes sent bad data"))
+            state.loadMessages(sessionId)?.messages.orEmpty()
         } catch (e: IOException) {
             watch.send(WatchCodec.status(Protocol.Conn.OFFLINE, "Offline - cached"))
             state.loadMessages(sessionId)?.messages.orEmpty()
