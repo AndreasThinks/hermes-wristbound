@@ -3,7 +3,7 @@
 // Watch <-> Android AppMessage protocol. Keep in sync with
 // android/app/src/main/java/dev/wristbound/companion/pebble/Protocol.kt and docs/PROTOCOL.md.
 
-#define PROTO_VERSION 3
+#define PROTO_VERSION 4
 
 // Watch -> phone commands (MESSAGE_KEY_Cmd)
 typedef enum {
@@ -14,8 +14,8 @@ typedef enum {
   CMD_NEW_SESSION = 5,   // Text (first message)
   CMD_PLAY = 6,          // SessionId, MessageId, Route
   CMD_PAUSE = 7,
-  CMD_RESUME = 8,
-  CMD_REPLAY = 9,        // SessionId, MessageId
+  CMD_RESUME = 8,        // Route
+  CMD_REPLAY = 9,        // SessionId, MessageId, Route
   CMD_STOP = 10,
   CMD_LIST_AUDIO = 11,   // Filter
   CMD_OPEN_REPLY = 12,   // SessionId, MessageId; answered with a REPLY flagged REQUESTED
@@ -36,6 +36,7 @@ typedef enum {
   TYPE_AUDIO = 8,          // Index, Total, SessionId, MessageId, Title, Text (preview), Flags, Time
   TYPE_AUDIO_START = 9,    // MessageId, Length (PCM bytes; 0 = failed), State (PCM format), Detail
   TYPE_AUDIO_DATA = 10,    // MessageId, Offset, Data
+  TYPE_AUDIO_ROUTE = 11,   // State (1 = headphones connected to the phone)
 } MessageType;
 
 typedef enum {
@@ -68,8 +69,8 @@ typedef enum {
 } SubmitState;
 
 typedef enum {
-  ROUTE_CURRENT = 0, // phone's active route; refuse silently switching to speaker
-  ROUTE_SPEAKER = 1, // explicit phone-speaker playback
+  ROUTE_HEADPHONES = 0, // headphones only; the phone refuses rather than switch to its speaker
+  ROUTE_SPEAKER = 1,    // the phone's own speaker, even while headphones are connected
 } PlaybackRoute;
 
 typedef enum {

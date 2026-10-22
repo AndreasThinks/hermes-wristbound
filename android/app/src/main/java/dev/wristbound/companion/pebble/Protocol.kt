@@ -10,7 +10,7 @@ import java.util.UUID
  */
 object Protocol {
     val WATCHAPP_UUID: UUID = UUID.fromString("094c587f-8bd7-4377-aa6b-ff55eb724b27")
-    const val VERSION = 3
+    const val VERSION = 4
 
     object Key {
         const val CMD = 10000u
@@ -64,6 +64,7 @@ object Protocol {
         const val AUDIO = 8
         const val AUDIO_START = 9
         const val AUDIO_DATA = 10
+        const val AUDIO_ROUTE = 11
     }
 
     enum class Conn(val code: Int) { OK(0), OFFLINE(1), STALE(2), NOT_CONFIGURED(3), AUTH_ERROR(4), ERROR(5) }
@@ -74,8 +75,11 @@ object Protocol {
         NONE(0), QUEUED(1), WORKING(2), COMPLETED(3), FAILED(4), UNCERTAIN(5), READ_ONLY(6), CANCELLED(7)
     }
 
+    /** Where the watch asked for a reply to play. */
     object Route {
-        const val CURRENT = 0
+        /** Headphones only: refuse rather than switch to the phone's speaker. */
+        const val HEADPHONES = 0
+        /** The phone's own speaker, even while headphones are connected. */
         const val SPEAKER = 1
     }
 

@@ -15,9 +15,9 @@ sealed class WatchCommand {
     data class Send(val sessionId: String, val text: String) : WatchCommand()
     data class NewSession(val text: String) : WatchCommand()
     data class Play(val sessionId: String, val messageId: String, val speaker: Boolean) : WatchCommand()
-    data class Replay(val sessionId: String, val messageId: String) : WatchCommand()
+    data class Replay(val sessionId: String, val messageId: String, val speaker: Boolean) : WatchCommand()
     data object Pause : WatchCommand()
-    data object Resume : WatchCommand()
+    data class Resume(val speaker: Boolean) : WatchCommand()
     data object Stop : WatchCommand()
     data class ListAudio(val includeTelegram: Boolean) : WatchCommand()
     data class OpenReply(val sessionId: String, val messageId: String) : WatchCommand()
@@ -43,6 +43,8 @@ object WatchCodec {
             else -> null
         }
 
+        fun speaker() = int(Key.ROUTE) == Protocol.Route.SPEAKER
+
         return when (int(Key.CMD)) {
             Protocol.Cmd.HELLO -> WatchCommand.Hello(
                 textBudget = int(Key.TEXT_BUDGET) ?: Protocol.DEFAULT_TEXT_BUDGET,
@@ -61,15 +63,15 @@ object WatchCodec {
             Protocol.Cmd.PLAY -> {
                 val sid = str(Key.SESSION_ID) ?: return null
                 val mid = str(Key.MESSAGE_ID) ?: return null
-                WatchCommand.Play(sid, mid, int(Key.ROUTE) == Protocol.Route.SPEAKER)
+                WatchCommand.Play(sid, mid, speaker())
             }
             Protocol.Cmd.REPLAY -> {
                 val sid = str(Key.SESSION_ID) ?: return null
                 val mid = str(Key.MESSAGE_ID) ?: return null
-                WatchCommand.Replay(sid, mid)
+                WatchCommand.Replay(sid, mid, speaker())
             }
             Protocol.Cmd.PAUSE -> WatchCommand.Pause
-            Protocol.Cmd.RESUME -> WatchCommand.Resume
+            Protocol.Cmd.RESUME -> WatchCommand.Resume(speaker())
             Protocol.Cmd.STOP -> WatchCommand.Stop
             Protocol.Cmd.LIST_AUDIO -> WatchCommand.ListAudio((int(Key.FILTER) ?: 1) != 0)
             Protocol.Cmd.PLAY_WATCH -> {
@@ -152,6 +154,12 @@ object WatchCodec {
         Key.MESSAGE_ID to text(messageId, Protocol.MESSAGE_ID_BUDGET),
         Key.OFFSET to PebbleDictionaryItem.UInt32(offset.toUInt()),
         Key.DATA to PebbleDictionaryItem.Bytes(data),
+    )
+
+    /** Whether headphones are connected to the phone: the watch offers "Play on headphones" only then. */
+    fun audioRoute(headphones: Boolean): PebbleDictionary = mapOf(
+        Key.TYPE to u8(Protocol.Type.AUDIO_ROUTE),
+        Key.STATE to u8(if (headphones) 1 else 0),
     )
 
     fun status(state: Protocol.Conn, detail: String): PebbleDictionary = mapOf(

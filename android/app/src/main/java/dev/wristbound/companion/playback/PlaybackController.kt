@@ -5,11 +5,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import androidx.core.content.ContextCompat
@@ -17,11 +20,12 @@ import dev.wristbound.companion.pebble.Protocol
 import java.io.File
 
 /**
- * Plays one exact reply, chosen by message id, on the phone's current audio route: either an
- * audio file from Hermes ([playFile]) or the phone's TextToSpeech engine ([play]). Playback
- * never silently falls back to the loudspeaker: without headphones it reports
- * [Protocol.Playback.NEEDS_SPEAKER] unless the request explicitly allowed the speaker, and a
- * headphone disconnect pauses rather than continuing out loud.
+ * Plays one exact reply, chosen by message id: either an audio file from Hermes ([playFile]) or
+ * the phone's TextToSpeech engine ([play]). Each request names its output. On headphones,
+ * playback never silently falls back to the loudspeaker: without them it reports
+ * [Protocol.Playback.NEEDS_SPEAKER], and a headphone disconnect pauses rather than continuing
+ * out loud. On the speaker, it plays from the phone's own speaker even while headphones are
+ * connected.
  */
 class PlaybackController(
     private val context: Context,
@@ -40,6 +44,8 @@ class PlaybackController(
     private var playing = false
     private var focusRequest: AudioFocusRequest? = null
     private var noisyRegistered = false
+    private var onSpeaker = false
+    private val speechFile = File(context.cacheDir, "speech.wav")
 
     private val attributes = AudioAttributes.Builder()
         .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -48,7 +54,7 @@ class PlaybackController(
 
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, intent: Intent) {
-            if (intent.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY && playing) {
+            if (intent.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY && playing && !onSpeaker) {
                 pause("Headphones disconnected")
             }
         }
@@ -60,19 +66,44 @@ class PlaybackController(
 
     fun hasPrivateOutput(): Boolean = audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { it.type in PRIVATE_OUTPUTS }
 
-    /** Start [text] for [id] from the beginning. */
+    /** Calls [listener] with whether headphones are connected: once now, then on every change. */
+    fun watchHeadphones(listener: (Boolean) -> Unit) {
+        audio.registerAudioDeviceCallback(object : AudioDeviceCallback() {
+            private var last: Boolean? = null
+
+            private fun check() {
+                val now = hasPrivateOutput()
+                if (now != last) {
+                    last = now
+                    listener(now)
+                }
+            }
+
+            override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) = check()
+            override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) = check()
+        }, Handler(Looper.getMainLooper()))
+    }
+
+    /** Start [text] for [id] from the beginning, on the phone's [speaker] or on headphones. */
     @Synchronized
-    fun play(id: String, text: String, allowSpeaker: Boolean) {
-        if (!allowSpeaker && !hasPrivateOutput()) {
+    fun play(id: String, text: String, speaker: Boolean) {
+        if (!speaker && !hasPrivateOutput()) {
             onState(id, Protocol.Playback.NEEDS_SPEAKER, "No headphones")
             return
         }
         stopInternal(report = false)
         messageId = id
+        onSpeaker = speaker
         chunks = SpeechChunker.chunks(text)
         position = 0
         if (chunks.isEmpty()) {
             onState(id, Protocol.Playback.ERROR, "Nothing to read")
+            return
+        }
+        if (speaker && hasPrivateOutput()) {
+            // Speech always follows the media route, which headphones take over; render it to a
+            // file instead, which can be pointed at the speaker.
+            startWhenReady { synthesizeToFile(id) }
             return
         }
         startWhenReady()
@@ -80,17 +111,19 @@ class PlaybackController(
 
     /** Play the audio file [file] for [id] from the start; [label] is what the watch shows. */
     @Synchronized
-    fun playFile(id: String, file: File, allowSpeaker: Boolean, label: String) {
-        if (!allowSpeaker && !hasPrivateOutput()) {
+    fun playFile(id: String, file: File, speaker: Boolean, label: String) {
+        if (!speaker && !hasPrivateOutput()) {
             onState(id, Protocol.Playback.NEEDS_SPEAKER, "No headphones")
             return
         }
         stopInternal(report = false)
         messageId = id
+        onSpeaker = speaker
         playerLabel = label
         val mp = MediaPlayer()
         try {
             mp.setAudioAttributes(attributes)
+            if (speaker) builtInSpeaker()?.let { mp.setPreferredDevice(it) }
             mp.setDataSource(file.absolutePath)
             mp.setOnCompletionListener { done(id) }
             mp.setOnErrorListener { _, _, _ -> failed(id); true }
@@ -115,14 +148,34 @@ class PlaybackController(
     }
 
     @Synchronized
-    fun resume(allowSpeaker: Boolean = false) {
+    fun resume(speaker: Boolean = false) {
         val id = messageId ?: return
         if (playing || (player == null && position >= chunks.size)) return
-        if (!allowSpeaker && !hasPrivateOutput()) {
+        if (!speaker && !hasPrivateOutput()) {
             onState(id, Protocol.Playback.NEEDS_SPEAKER, "No headphones")
             return
         }
+        onSpeaker = speaker
+        player?.setPreferredDevice(if (speaker) builtInSpeaker() else null)
         if (player != null) startPlayer() else startWhenReady()
+    }
+
+    private fun builtInSpeaker(): AudioDeviceInfo? =
+        audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+
+    /** The whole of [chunks], up to what the engine takes in one go, as one file for [playFile]. */
+    private fun synthesizeToFile(id: String) {
+        val engine = tts ?: return
+        val limit = TextToSpeech.getMaxSpeechInputLength()
+        val text = StringBuilder()
+        for (chunk in chunks) {
+            if (text.length + chunk.length + 1 > limit) break
+            text.append(chunk).append(' ')
+        }
+        onState(id, Protocol.Playback.IDLE, "Preparing phone voice")
+        if (engine.synthesizeToFile(text.toString(), Bundle(), speechFile, "$id$FILE_SUFFIX") != TextToSpeech.SUCCESS) {
+            onState(id, Protocol.Playback.ERROR, "Phone voice unavailable")
+        }
     }
 
     private fun startPlayer() {
@@ -185,13 +238,13 @@ class PlaybackController(
         if (report && id != null) onState(id, Protocol.Playback.IDLE, "Stopped")
     }
 
-    private fun startWhenReady() {
+    private fun startWhenReady(start: () -> Unit = ::speakFromPosition) {
         val engine = tts
         if (engine != null && ttsReady) {
-            speakFromPosition()
+            start()
             return
         }
-        pendingStart = { speakFromPosition() }
+        pendingStart = start
         if (engine == null) {
             tts = TextToSpeech(context.applicationContext) { status ->
                 synchronized(this) {
@@ -230,6 +283,11 @@ class PlaybackController(
         override fun onStart(utteranceId: String) {}
 
         override fun onDone(utteranceId: String) = synchronized(this@PlaybackController) {
+            if (utteranceId.endsWith(FILE_SUFFIX)) {
+                val id = utteranceId.removeSuffix(FILE_SUFFIX)
+                if (id == messageId && onSpeaker) playFile(id, speechFile, speaker = true, "Playing phone voice")
+                return@synchronized
+            }
             val (id, index) = parse(utteranceId) ?: return@synchronized
             if (id != messageId || !playing) return@synchronized
             position = index + 1
@@ -245,6 +303,10 @@ class PlaybackController(
         override fun onError(utteranceId: String) = onError(utteranceId, TextToSpeech.ERROR)
 
         override fun onError(utteranceId: String, errorCode: Int) = synchronized(this@PlaybackController) {
+            if (utteranceId.endsWith(FILE_SUFFIX)) {
+                if (utteranceId.removeSuffix(FILE_SUFFIX) == messageId) onState(messageId, Protocol.Playback.ERROR, "Phone voice unavailable")
+                return@synchronized
+            }
             val (id, _) = parse(utteranceId) ?: return@synchronized
             if (id != messageId) return@synchronized
             playing = false
@@ -291,6 +353,7 @@ class PlaybackController(
     }
 
     private companion object {
+        const val FILE_SUFFIX = "#file"
         val PRIVATE_OUTPUTS = setOf(
             AudioDeviceInfo.TYPE_WIRED_HEADSET,
             AudioDeviceInfo.TYPE_WIRED_HEADPHONES,

@@ -1,4 +1,4 @@
-# Watch ↔ phone protocol (v3)
+# Watch ↔ phone protocol (v4)
 
 Pebble AppMessages between the watchapp (`watch/src/c/protocol.h`) and the Android companion (`android/.../pebble/Protocol.kt`). The phone holds all Hermes state and credentials; the watch holds only what is on screen.
 
@@ -23,7 +23,7 @@ Keys are numbered by the Pebble SDK from the order of `messageKeys` in `watch/pa
 | State | 10012 | uint8 |
 | Detail | 10013 | cstring (≤ 63 bytes), human-readable status |
 | Filter | 10014 | uint8: 1 include Telegram sessions |
-| Route | 10015 | uint8: 0 current route, 1 phone speaker allowed |
+| Route | 10015 | uint8: 0 headphones only, 1 the phone's own speaker |
 | Time | 10016 | uint32, seconds since the epoch |
 | Data | 10017 | byte array, audio samples |
 | Offset | 10018 | uint32, byte offset into a clip |
@@ -40,8 +40,8 @@ Keys are numbered by the Pebble SDK from the order of `messageKeys` in `watch/pa
 | 5 | NEW_SESSION | Text (first message) |
 | 6 | PLAY | SessionId, MessageId, Route |
 | 7 | PAUSE | |
-| 8 | RESUME | |
-| 9 | REPLAY | SessionId, MessageId |
+| 8 | RESUME | Route |
+| 9 | REPLAY | SessionId, MessageId, Route |
 | 10 | STOP | |
 | 11 | LIST_AUDIO | Filter. Asks for the Recent audio list, refreshed from Hermes. |
 | 12 | OPEN_REPLY | SessionId, MessageId. Asks for one reply's full text; answered with REPLY flagged *requested*. |
@@ -63,6 +63,7 @@ Keys are numbered by the Pebble SDK from the order of `messageKeys` in `watch/pa
 | 8 | AUDIO | Index, Total, SessionId, MessageId, Title (session), Text (preview, ≤ 63 bytes), Flags (1 new, 2 Telegram), Time. One Recent audio row, newest first. Total 0 means an empty list. |
 | 9 | AUDIO_START | MessageId, Length (bytes; 0 means it cannot play, with the reason in Detail), State (format: 0 = 8 kHz 8-bit signed mono PCM), Detail (label, such as "Hermes audio"). |
 | 10 | AUDIO_DATA | MessageId, Offset, Data. One chunk, in order. |
+| 11 | AUDIO_ROUTE | State (1 = headphones connected to the phone). Sent after HELLO and whenever headphones connect or disconnect; the watch offers *Play on headphones* only while it is 1. |
 
 Session flags: 1 unread, 2 Telegram origin, 4 Hermes refused to continue it (for example a Kanban worker transcript), 8 Hermes is working. Message flags: 1 truncated (rest on phone), 2 Hermes generated audio for this reply, 4 pending, 8 requested (REPLY only).
 
@@ -74,5 +75,5 @@ Session flags: 1 unread, 2 Telegram origin, 4 Hermes refused to continue it (for
 - A transport acknowledgement means only that the phone has the command. Whether Hermes ran it arrives later as SUBMIT states. *Uncertain* means the phone lost the stream after Hermes may have accepted the turn; it is not resent.
 - Recent audio lists assistant replies that carry audio Hermes generated (its text-to-speech output), from the 12 most recently active visible sessions, the last 60 transcript rows of each, newest 15 overall (5 on aplite). The phone keeps a bounded copy (30 items) so the list shows at once, offline and after a restart; HELLO sends that copy, LIST_AUDIO sends it and then a refreshed one. Items are new until opened on the watch. The user's own recordings never appear, nor do Telegram's automatic voice replies, which Hermes does not keep.
 - A watch and phone on different protocol versions show "Update watch or phone app".
-- PLAY names one exact message id. Without headphones and with Route 0 the phone answers PLAYBACK state 3 instead of switching to the loudspeaker.
+- PLAY names one exact message id. With Route 0 and no headphones (they went between the menu and the press) the phone answers PLAYBACK state 3 instead of switching to the loudspeaker. Route 1 plays from the phone's built-in speaker even while headphones are connected (the phone voice is rendered to a file for this, since Android speech always follows the media route). RESUME and REPLAY carry the route of the last PLAY; a missing Route counts as 0.
 - Watch speaker (emery, flint and gabbro only). The phone decodes the reply's own Hermes audio, mixes it to mono, resamples it to 8 kHz 8-bit and caps it at 2 minutes (960 KB), so the watch never decodes anything. Flow control is pull based: the watch asks with AUDIO_PULL for as much as its ring buffer has room for (48 KB, about 6 s; 16 KB on flint), and the phone never sends past the last pull. The watch buffers before it starts, by an amount set from the link rate it measures, and goes back to buffering if the link falls behind. The phone keeps the last two converted clips, so Replay does not download again. A reply without Hermes audio is answered with Length 0 and a reason; nothing ever falls back to the phone's speaker.

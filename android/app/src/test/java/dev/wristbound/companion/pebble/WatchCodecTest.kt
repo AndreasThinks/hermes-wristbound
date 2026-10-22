@@ -35,6 +35,20 @@ class WatchCodecTest {
             WatchCommand.Play("s1", "7", speaker = true),
             WatchCodec.decode(mapOf(Key.CMD to u8(6), Key.SESSION_ID to t("s1"), Key.MESSAGE_ID to t("7"), Key.ROUTE to u8(1))),
         )
+        assertEquals(
+            WatchCommand.Replay("s1", "7", speaker = false),
+            WatchCodec.decode(mapOf(Key.CMD to u8(9), Key.SESSION_ID to t("s1"), Key.MESSAGE_ID to t("7"), Key.ROUTE to u8(0))),
+        )
+        assertEquals(WatchCommand.Resume(speaker = true), WatchCodec.decode(mapOf(Key.CMD to u8(8), Key.ROUTE to u8(1))))
+        // An older watch sends no route: never assume the speaker is allowed.
+        assertEquals(WatchCommand.Resume(speaker = false), WatchCodec.decode(mapOf(Key.CMD to u8(8))))
+    }
+
+    @Test
+    fun encodesAudioRoute() {
+        val msg = WatchCodec.audioRoute(headphones = true)
+        assertEquals(Protocol.Type.AUDIO_ROUTE, (msg[Key.TYPE] as PebbleDictionaryItem.UInt8).value.toInt())
+        assertEquals(1, (msg[Key.STATE] as PebbleDictionaryItem.UInt8).value.toInt())
     }
 
     @Test
