@@ -1,0 +1,7 @@
+<resources>
+    <!-- Fixed ids so the setup screen keeps its scroll position and typed text across recreation. -->
+    <item name="setup_scroll" type="id" />
+    <item name="setup_url" type="id" />
+    <item name="setup_username" type="id" />
+    <item name="setup_token" type="id" />
+</resources>

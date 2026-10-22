@@ -5,6 +5,7 @@ import android.util.Log
 import dev.wristbound.companion.hermes.AudioClip
 import dev.wristbound.companion.hermes.DashboardAuth
 import dev.wristbound.companion.hermes.DashboardClient
+import dev.wristbound.companion.hermes.Endpoint
 import dev.wristbound.companion.hermes.HermesApi
 import dev.wristbound.companion.hermes.HermesHttpException
 import dev.wristbound.companion.hermes.HermesMessage
@@ -25,6 +26,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -74,15 +77,60 @@ class Wristbound private constructor(context: Context) {
 
     @Volatile private var client: DashboardClient? = null
 
-    /** The dashboard client for the configured URL; rebuilt when the URL changes. */
+    /** The dashboard client for the active URL; rebuilt when the URL changes. */
     fun client(): DashboardClient? {
         val url = settings.baseUrl
         if (url.isBlank()) return null
-        client?.let { if (it.auth.base.toString().trimEnd('/') == url.trimEnd('/')) return it }
-        return runCatching { DashboardClient(DashboardAuth(url, settings)) }.getOrNull().also { client = it }
+        client?.let { if (Endpoint.same(it.auth.base.toString(), url)) return it }
+        return runCatching { DashboardClient(DashboardAuth(url, settings.credentialsFor(url))) }
+            .onFailure { Log.w(TAG, "active dashboard URL is unusable: ${it.javaClass.simpleName}") }
+            .getOrNull().also { client = it }
     }
 
     private fun api(): DashboardClient? = if (settings.isConfigured) client() else null
+
+    // -- backend state --------------------------------------------------------------------------
+
+    private val _backend = MutableStateFlow(BackendState(BackendLink.UNKNOWN))
+
+    /** How the last request to Hermes went: separate from whether credentials are saved. */
+    val backend: StateFlow<BackendState> = _backend
+
+    private fun recordBackend(error: Throwable?) {
+        _backend.value = when (error) {
+            null -> BackendState(BackendLink.CONNECTED)
+            is HermesHttpException -> if (error.isAuth) BackendState(BackendLink.SIGN_IN_REQUIRED, "Hermes rejected the sign-in")
+                else BackendState(BackendLink.ERROR, "Hermes error: ${error.message}")
+            is HermesProtocolException -> BackendState(BackendLink.ERROR, error.message.orEmpty())
+            else -> BackendState(BackendLink.OFFLINE, error.message.orEmpty())
+        }
+    }
+
+    /**
+     * Check the active dashboard end to end: the session list and the gateway socket that
+     * sends replies. Returns the number of recent sessions and how many are from Telegram.
+     */
+    suspend fun checkConnection(): Pair<Int, Int> {
+        val client = api() ?: throw HermesHttpException(401, "signed_out", "Sign in to Hermes")
+        _backend.value = BackendState(BackendLink.CHECKING)
+        try {
+            val sessions = client.listSessions(20)
+            client.openGateway().close()
+            recordBackend(null)
+            return sessions.size to sessions.count { it.isTelegram }
+        } catch (e: IOException) {
+            recordBackend(e)
+            throw e
+        }
+    }
+
+    /** Sign-in or sign-out changed the credentials or the active dashboard. */
+    fun onCredentialsChanged() {
+        client = null
+        _backend.value = BackendState(if (settings.isConfigured) BackendLink.UNKNOWN else BackendLink.SIGNED_OUT)
+        updateMonitoring()
+        if (watchOpen) scope.launch { pushSessions() }
+    }
 
     // -- watch lifecycle ------------------------------------------------------------------------
 
@@ -131,7 +179,12 @@ class Wristbound private constructor(context: Context) {
     // -- sessions & history ---------------------------------------------------------------------
 
     private suspend fun fetchSessions(api: HermesApi): List<HermesSession> {
-        val sessions = api.listSessions(100)
+        val sessions = try {
+            api.listSessions(100).also { recordBackend(null) }
+        } catch (e: IOException) {
+            recordBackend(e)
+            throw e
+        }
         sessions.forEach { sessionsById[it.id] = it }
         state.baseline(sessions.associate { it.id to it.activity })
         return sessions

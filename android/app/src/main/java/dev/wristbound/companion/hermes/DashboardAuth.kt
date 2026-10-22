@@ -39,6 +39,8 @@ sealed class Credentials {
 interface CredentialStore {
     fun load(): Credentials?
     fun save(credentials: Credentials?)
+    /** The dashboard ended the sign-in (a dead refresh token), as opposed to the user signing out. */
+    fun expire() = save(null)
 }
 
 /** The user rejected or abandoned sign-in, or the dashboard refused the credentials. */
@@ -174,7 +176,7 @@ class DashboardAuth(
                     Credentials.Native(tokens).also { store.save(it) }
                 }
                 // The refresh token is dead: sign-in is needed again. 5xx keeps the tokens.
-                response.code == 401 -> { store.save(null); null }
+                response.code == 401 -> { store.expire(); null }
                 else -> throw HermesHttp.error(response)
             }
         }

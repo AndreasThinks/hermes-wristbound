@@ -1,3 +1,11 @@
 <resources>
-    <style name="Theme.Wristbound" parent="Theme.AppCompat.DayNight.DarkActionBar" />
+    <!--
+      No window action bar: the setup screen draws its own toolbar above the scrolling form and
+      pads both for the system bars, so nothing scrolls under the title or the status bar.
+    -->
+    <style name="Theme.Wristbound" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/wristbound_blue</item>
+        <item name="colorPrimaryDark">@color/wristbound_blue</item>
+        <item name="colorAccent">@color/wristbound_blue_light</item>
+    </style>
 </resources>

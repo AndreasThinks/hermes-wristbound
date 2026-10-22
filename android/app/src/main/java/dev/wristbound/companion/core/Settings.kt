@@ -5,8 +5,11 @@ import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import dev.wristbound.companion.hermes.BoundCredentialStore
+import dev.wristbound.companion.hermes.BoundCredentials
 import dev.wristbound.companion.hermes.CredentialStore
 import dev.wristbound.companion.hermes.Credentials
+import dev.wristbound.companion.hermes.EndpointCredentials
 import dev.wristbound.companion.hermes.HermesHttp
 import java.security.KeyStore
 import javax.crypto.Cipher
@@ -16,28 +19,51 @@ import javax.crypto.spec.GCMParameterSpec
 
 /**
  * User settings. Hermes credentials (sign-in tokens or a session token) are encrypted with an
- * Android Keystore key and never leave the phone.
+ * Android Keystore key and never leave the phone. They are stored with the dashboard address
+ * that issued them and only used for that address (see [EndpointCredentials]).
  */
-class Settings(context: Context) : CredentialStore {
+class Settings(context: Context) : BoundCredentialStore {
     private val prefs: SharedPreferences = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
+    /**
+     * The active dashboard: the one last signed in to successfully. The setup screen only
+     * changes it once a sign-in to a new, validated address has worked.
+     */
     var baseUrl: String
         get() = prefs.getString(KEY_URL, "").orEmpty()
-        set(v) = prefs.edit().putString(KEY_URL, v.trim()).apply()
+        set(v) { prefs.edit().putString(KEY_URL, v.trim()).commit() }
 
     @Synchronized
-    override fun load(): Credentials? = prefs.getString(KEY_CREDENTIALS, null)?.let { stored ->
-        runCatching { HermesHttp.json.decodeFromString(Credentials.serializer(), Secrets.decrypt(stored)) }.getOrNull()
+    override fun loadBound(): BoundCredentials? {
+        val stored = prefs.getString(KEY_CREDENTIALS, null) ?: return null
+        val credentials = runCatching { HermesHttp.json.decodeFromString(Credentials.serializer(), Secrets.decrypt(stored)) }.getOrNull()
+            ?: return null
+        // Credentials saved before they were bound to an address belong to the active one.
+        val endpoint = prefs.getString(KEY_CREDENTIALS_URL, null) ?: baseUrl
+        return BoundCredentials(endpoint, credentials)
     }
 
     @Synchronized
-    override fun save(credentials: Credentials?) {
+    override fun saveBound(bound: BoundCredentials?) {
         // commit(): a rotated refresh token must be on disk before the old one is forgotten.
-        if (credentials == null) prefs.edit().remove(KEY_CREDENTIALS).commit()
-        else prefs.edit().putString(KEY_CREDENTIALS, Secrets.encrypt(HermesHttp.json.encodeToString(Credentials.serializer(), credentials))).commit()
+        if (bound == null) prefs.edit().remove(KEY_CREDENTIALS).remove(KEY_CREDENTIALS_URL).commit()
+        else prefs.edit()
+            .putString(KEY_CREDENTIALS, Secrets.encrypt(HermesHttp.json.encodeToString(Credentials.serializer(), bound.credentials)))
+            .putString(KEY_CREDENTIALS_URL, bound.endpoint)
+            .commit()
     }
 
-    val isConfigured: Boolean get() = baseUrl.isNotBlank() && load() != null
+    override var signInExpired: Boolean
+        get() = prefs.getBoolean("sign_in_expired", false)
+        set(v) { prefs.edit().putBoolean("sign_in_expired", v).commit() }
+
+    /** Credentials for [endpoint], and only for it. */
+    fun credentialsFor(endpoint: String): CredentialStore = EndpointCredentials(endpoint, this)
+
+    /** Credentials for the active dashboard. */
+    val credentials: Credentials? get() = if (baseUrl.isBlank()) null else credentialsFor(baseUrl).load()
+
+    val isConfigured: Boolean get() = credentials != null
 
     /** Prefer Hermes' own voice (its `tts:` config) when a reply has no attached audio. */
     var hermesVoice: Boolean
@@ -94,6 +120,7 @@ class Settings(context: Context) : CredentialStore {
     private companion object {
         const val KEY_URL = "hermes_url"
         const val KEY_CREDENTIALS = "hermes_credentials"
+        const val KEY_CREDENTIALS_URL = "hermes_credentials_url"
     }
 }
 
