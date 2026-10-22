@@ -2,7 +2,9 @@
 
 A Pebble watchapp and Android companion for using [Hermes Agent](https://github.com/NousResearch/hermes-agent) without taking your phone out: browse sessions, read replies, answer by dictation or quick reply, and play replies through your headphones, all from the wrist.
 
-**Status: first vertical slice built, not yet tested on real devices.** The watchapp builds for every Pebble platform and runs in the emulator against a scripted phone; the Android companion builds and passes its unit tests. Nothing has been run against a real Hermes, phone or watch yet; see [docs/TESTING.md](docs/TESTING.md).
+**Status: experimental public release, v0.4.0.** Installed and exercised on a Pixel 9a with Hermes 0.22.2 and a Pebble Time 2. The user has confirmed session browsing and phone/headphone audio playback. Watch-speaker sound, forced phone-speaker routing with headphones attached, and hardware Quick Launch still need dedicated acceptance checks. All seven watch targets build, but that is not a claim of real-device testing on every model. See [installation and setup](docs/INSTALL.md) and [the test plan](docs/TESTING.md).
+
+**Android companion required.** The watch app is not standalone and does not include a hosted Hermes service. Download the matched APK/PBW from [GitHub Releases](https://github.com/AndreasThinks/hermes-wristbound/releases/latest). The companion is currently a sideloaded debug APK, not a Play Store app.
 
 <p>
   <img src="docs/screenshots/splash.png" width="144" alt="Launch screen: the Hermes girl in green and violet pixels over the Wristbound name">
@@ -76,9 +78,11 @@ The phone talks to Hermes the way the Hermes desktop app and Hermes-Relay do: it
 - Replies that arrive through Telegram, Ringbearer or the desktop are checked for while the watchapp is open (every 30 s), and with optional background checking also while it is closed and the phone is locked.
 - Plays a reply on headphones or on the phone's speaker, whichever the watch picked: Hermes' own audio for that reply, otherwise the reply read again in Hermes' configured voice, otherwise the phone's voice. Headphone playback pauses when they disconnect instead of switching to the speaker; speaker playback is always explicit and uses the phone's speaker even while headphones are connected. The watch is told whenever headphones connect or disconnect.
 - One alert policy for every delivery path, with separate settings for session visibility, Telegram text alerts, Telegram audio alerts, replying to Telegram sessions, tool activity and notification privacy. Polling checkpoints persist, so a failed fetch or a restart never loses or repeats an alert.
-- A bounded offline cache with no stored media.
+- Bounded offline conversation/audio caches on the phone; the watch never stores dashboard credentials.
 
 ## Setup
+
+Start with the [step-by-step installation guide](docs/INSTALL.md), including the companion APK, secure dashboard setup, audio routes, Quick Launch and troubleshooting.
 
 1. **Hermes.** On the Hermes host, run the dashboard (`hermes dashboard`, port 9119) on loopback and publish it to your tailnet: `tailscale serve --bg --https=10443 http://127.0.0.1:9119`. If Hermes-Relay is already set up with `hermes-relay-tailscale enable`, this is already done; use the same address.
 2. **Phone.** Install the companion APK (from CI or a local build), open Wristbound and enter the dashboard address, for example `https://hermes.tailnet-name.ts.net:10443`. Sign in with the dashboard username and password, use *Sign in with browser* for other providers, or, for a dashboard without a sign-in page, paste its session token (under *Advanced*). The address is checked before anything is sent, and only becomes the active dashboard once sign-in works; credentials are kept for that address alone. Once signed in, the form is replaced by an account card showing the dashboard, whether Hermes is reachable right now, *Test connection* and *Sign out*.
@@ -94,7 +98,7 @@ Every pull request builds both: the watch `.pbw` and the debug APK are attached 
 - A watch reply in a Telegram session is stored in that session, as a desktop reply is; it is not posted into the Telegram chat. Replies to Telegram sessions can be turned off.
 - **Telegram's automatic voice replies** (voice mode) are sent to Telegram and deleted by Hermes without a transcript record, so no client can play the original; Wristbound can only read that reply aloud again. Audio from Hermes' text-to-speech tool is kept and plays as is.
 - **Watch speaker playback is untested on hardware.** It works in the emulator up to the point of sound (the emulator has none). Audio is 8 kHz 8-bit to fit Bluetooth, so expect phone-call quality, and a slow link drops back to buffering mid-clip.
-- No autoplay.
+- Incoming replies do not autoplay. The optional **Play latest audio** Quick Launch action deliberately starts playback and may use the phone speaker when headphones are absent.
 
 Details are in [docs/HERMES_API.md](docs/HERMES_API.md).
 
