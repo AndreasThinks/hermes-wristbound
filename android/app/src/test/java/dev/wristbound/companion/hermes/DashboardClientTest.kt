@@ -20,6 +20,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.util.Base64
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class DashboardClientTest {
     @get:Rule val tmp = TemporaryFolder()
@@ -158,6 +160,7 @@ class DashboardClientTest {
 
     @Test
     fun gatewaySocketUsesATicketAndSpeaksJsonRpc() = runBlocking {
+        val serverSide = FakeGatewayServer()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl!!.encodedPath) {
                 "/api/auth/ws-ticket" -> {
@@ -166,7 +169,7 @@ class DashboardClientTest {
                 }
                 "/api/ws" -> {
                     assertEquals("tkt-1", request.requestUrl!!.queryParameter("ticket"))
-                    MockResponse().withWebSocketUpgrade(FakeGatewayServer())
+                    MockResponse().withWebSocketUpgrade(serverSide)
                 }
                 else -> MockResponse().setResponseCode(404)
             }
@@ -179,10 +182,22 @@ class DashboardClientTest {
         val error = runCatching { gateway.call("prompt.submit", params("session_id" to "nope")) }.exceptionOrNull()
         assertEquals(4001, (error as GatewayRpcException).code)
         gateway.close()
+        // Let the close handshake finish so the mock server can shut down cleanly.
+        assertTrue(serverSide.closed.await(5, TimeUnit.SECONDS))
     }
 
     /** Server side of /api/ws: ready frame, then answers by method. */
     private class FakeGatewayServer : WebSocketListener() {
+        val closed = CountDownLatch(1)
+
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            webSocket.close(1000, null)
+        }
+
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = closed.countDown()
+
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = closed.countDown()
+
         override fun onOpen(webSocket: WebSocket, response: Response) {
             webSocket.send("""{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"heartbeat":true}}}""")
         }
