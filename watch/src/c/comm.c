@@ -128,9 +128,12 @@ static void prv_outbox_failed(DictionaryIterator *iter, AppMessageResult reason,
   const Pending *p = &s_queue[s_head];
   if (++s_retries > MAX_RETRIES) {
     if (p->cmd == CMD_SEND || p->cmd == CMD_NEW_SESSION) {
-      // Never reached the phone, so it cannot have been submitted to Hermes.
-      g_model.submit = SUBMIT_FAILED;
-      strncpy(g_model.submit_detail, "Phone unreachable", DETAIL_LEN - 1);
+      // A NACK or a closed connection means the phone never took it. A timeout may only have
+      // lost the acknowledgement, so the message may be on its way to Hermes.
+      bool maybe_delivered = reason == APP_MSG_SEND_TIMEOUT;
+      g_model.submit = maybe_delivered ? SUBMIT_UNCERTAIN : SUBMIT_FAILED;
+      strncpy(g_model.submit_detail, maybe_delivered ? "Check phone before resending"
+                                                     : "Phone unreachable", DETAIL_LEN - 1);
       if (s_handlers.submit_changed) {
         s_handlers.submit_changed();
       }

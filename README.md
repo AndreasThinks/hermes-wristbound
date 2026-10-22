@@ -2,7 +2,7 @@
 
 A Pebble watch app and Android companion for using [Hermes Agent](https://github.com/NousResearch/hermes-agent) without taking your phone out.
 
-**Status: proposal and documentation only. No application code, builds or working integration yet.**
+**Status: first vertical slice built, not yet tested on real devices.** The watchapp builds for every Pebble platform and runs in the emulator against a scripted phone; the Android companion builds and passes its unit tests. Nothing has been run against a real Hermes, phone or watch yet; see [docs/TESTING.md](docs/TESTING.md).
 
 ## The experience
 
@@ -41,7 +41,23 @@ Use existing supported Hermes APIs first. Any missing capabilities should be ide
 
 - [Project brief](docs/PROJECT.md): scope, UX and agreed direction.
 - [Architecture and open questions](docs/ARCHITECTURE.md): boundaries, data and reliability.
-- [First milestone](docs/MILESTONES.md): discovery and real-device acceptance criteria.
+- [Milestones](docs/MILESTONES.md): discovery and real-device acceptance criteria, with current status.
+- [Hermes API findings](docs/HERMES_API.md): the routes Wristbound uses and the gaps it works around.
+- [Watch ↔ phone protocol](docs/PROTOCOL.md): AppMessage keys, commands and rules.
+- [Testing](docs/TESTING.md): automated checks, the emulator harness and the real-device plan.
+
+## What works in this slice
+
+- **Watch** (`watch/`, C, Pebble SDK 4.x): session list with unread, Telegram, read-only and working labels; Telegram show/hide toggle; recent history, newest first; full reply view; reply by dictation or quick replies; new session; Play, Play on phone speaker, Pause, Resume, Replay and Stop for one exact reply; incoming-reply alert; clear queued, working, failed, uncertain and read-only states; last session remembered across launches.
+- **Phone** (`android/`, Kotlin, PebbleKit Android 2): Hermes client for the API server's session routes over the tailnet; streamed turns with at-most-once submission; reply delivery to the open watchapp, or as one phone notification (mirrored to the Pebble with Play / Play on speaker / Read on watch actions); background polling for replies that arrive through Telegram, Ringbearer or the desktop; reply playback with the phone's voice on the current audio route, pausing on headphone disconnect instead of switching to the speaker; separate settings for visibility, alerts, tool activity and notification privacy; bounded offline cache; encrypted API key.
+
+## Known gaps
+
+- **Telegram-origin sessions are read-only from the watch.** Hermes' REST API refuses turns in sessions another surface owns (`409 permission_denied`). Reading works; replying needs the gateway WebSocket or an upstream change.
+- **Hermes' own TTS audio is not played.** The API server does not serve audio files to remote clients, so the phone speaks the reply text itself.
+- **Replies from other surfaces are polled**, not pushed (30 s to 5 min, while background sync is on).
+
+Details and next steps are in [docs/HERMES_API.md](docs/HERMES_API.md).
 
 ## Not in scope yet
 
@@ -49,7 +65,22 @@ Replacing Hermes, rebuilding Telegram, changing Ringbearer's working ingress, or
 
 ## Development
 
-There is no build or test command yet. Platform choices and exact API contracts are pending discovery. Expected components are a native Android companion and a Pebble watch app; no framework or SDK version is pinned yet.
+```bash
+# Watchapp (needs pebble-tool: `uv tool install pebble-tool && pebble sdk install latest`)
+cd watch && pebble build            # -> watch/build/watch.pbw
+
+# Android companion (JDK 21, Android SDK platform 37; PebbleKit Android 2 requires compileSdk 37)
+cd android && ./gradlew testDebugUnitTest assembleDebug   # -> android/app/build/outputs/apk/debug/
+```
+
+CI runs both on every pull request (`.github/workflows/build.yml`).
+
+### Setup
+
+1. On the Hermes host, enable the API server (`API_SERVER_ENABLED=true`, a strong `API_SERVER_KEY`) and keep it on loopback. Publish it to your tailnet with `tailscale serve --https=443 http://127.0.0.1:8642`.
+2. Install the APK on the phone, open Wristbound, enter the tailnet HTTPS address and the key, and press *Save and test*.
+3. Install `watch.pbw` through the Pebble app. The debug APK's package (`dev.wristbound.companion.debug`) and the release package are both listed as companion apps.
+4. Optional: turn on *Watch for replies in background* to get replies while the watchapp is closed and the phone is locked.
 
 ## License
 
