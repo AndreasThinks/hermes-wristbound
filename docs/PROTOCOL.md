@@ -52,7 +52,7 @@ Keys are numbered by the Pebble SDK from the order of `messageKeys` in `watch/pa
 | 6 | SUBMIT | SessionId, State (1 queued, 2 working, 3 completed, 4 failed, 5 uncertain, 6 read-only, 7 cancelled), Detail |
 | 7 | SESSION_OPENED | SessionId, Title, Flags. Sent after NEW_SESSION created a session. |
 
-Session flags: 1 unread, 2 Telegram origin, 4 read-only through the API, 8 Hermes is working. Message flags: 1 truncated (rest on phone), 2 Hermes attached audio, 4 pending.
+Session flags: 1 unread, 2 Telegram origin, 4 Hermes refused to continue it (for example a Kanban worker transcript), 8 Hermes is working. Message flags: 1 truncated (rest on phone), 2 Hermes generated audio for this reply, 4 pending.
 
 ## Rules
 

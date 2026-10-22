@@ -1,98 +1,243 @@
 package dev.wristbound.companion.core
 
+import dev.wristbound.companion.hermes.Gateway
+import dev.wristbound.companion.hermes.GatewayClosedException
+import dev.wristbound.companion.hermes.GatewayEvent
+import dev.wristbound.companion.hermes.GatewayRpcException
 import dev.wristbound.companion.hermes.HermesApi
+import dev.wristbound.companion.hermes.HermesHttp
 import dev.wristbound.companion.hermes.HermesHttpException
 import dev.wristbound.companion.hermes.HermesMessage
 import dev.wristbound.companion.hermes.HermesSession
-import dev.wristbound.companion.hermes.RunStatus
-import dev.wristbound.companion.hermes.TurnEvent
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Test
-import java.io.IOException
 import java.net.ConnectException
 
 class TurnRunnerTest {
+    /** A scripted gateway: [answer] returns each call's result, or throws. */
+    private class FakeGateway(
+        val answer: suspend FakeGateway.(method: String, params: JsonObject, onSent: () -> Unit) -> JsonObject,
+    ) : Gateway {
+        val channel = Channel<GatewayEvent>(Channel.UNLIMITED)
+        val calls = mutableListOf<Pair<String, JsonObject>>()
+        override val events get() = channel
+
+        override suspend fun call(method: String, params: JsonObject, timeoutMs: Long, onSent: () -> Unit): JsonObject {
+            calls += method to params
+            return answer(method, params, onSent)
+        }
+
+        fun emit(type: String, payload: JsonObject = JsonObject(emptyMap()), sid: String = "rt1") {
+            channel.trySend(GatewayEvent(type, sid, payload))
+        }
+
+        fun drop() = channel.close(GatewayClosedException("socket reset"))
+
+        override fun close() {
+            channel.close()
+        }
+    }
+
     private class FakeApi(
-        val stream: suspend (suspend (TurnEvent) -> Unit) -> Unit,
-        val statuses: MutableList<RunStatus> = mutableListOf(),
+        val gateways: MutableList<FakeGateway>,
+        var transcript: List<HermesMessage> = emptyList(),
+        val openFailure: Exception? = null,
     ) : HermesApi {
-        var submissions = 0
-        var polls = 0
-        override suspend fun listSessions(limit: Int, source: String?) = emptyList<HermesSession>()
-        override suspend fun recentMessages(sessionId: String, limit: Int) = emptyList<HermesMessage>()
-        override suspend fun createSession(title: String?) = HermesSession("new")
-        override suspend fun runStatus(runId: String): RunStatus {
-            polls++
-            return if (statuses.size > 1) statuses.removeAt(0) else statuses.first()
+        val opened = mutableListOf<FakeGateway>()
+        override suspend fun listSessions(limit: Int) = emptyList<HermesSession>()
+        override suspend fun recentMessages(sessionId: String, limit: Int) = transcript
+        override suspend fun openGateway(): Gateway {
+            openFailure?.let { throw it }
+            return gateways.removeAt(0).also { opened += it }
         }
-        override suspend fun streamTurn(sessionId: String, message: String, idempotencyKey: String, onEvent: suspend (TurnEvent) -> Unit) {
-            submissions++
-            stream(onEvent)
+        val submissions get() = opened.sumOf { g -> g.calls.count { it.first == "prompt.submit" } }
+    }
+
+    private fun obj(vararg pairs: Pair<String, Any>) = buildJsonObject {
+        for ((k, v) in pairs) when (v) {
+            is String -> put(k, v)
+            is Boolean -> put(k, v)
+            else -> put(k, v.toString())
         }
     }
 
-    private suspend fun run(api: FakeApi) = TurnRunner(api, pollIntervalMs = 10, pollTimeoutMs = 1_000)
-        .run("s1", "hi", "k", onProgress = { _, _ -> })
+    private fun msg(json: String) = HermesHttp.json.decodeFromString(HermesMessage.serializer(), json)
+
+    private val ok = obj("status" to "streaming")
+
+    /** Answers resume/create/submit, then plays [after] once the prompt is in. */
+    private fun scripted(after: FakeGateway.() -> Unit) = FakeGateway { method, _, onSent ->
+        when (method) {
+            "session.resume" -> obj("session_id" to "rt1", "running" to false)
+            "session.create" -> obj("session_id" to "rt1", "stored_session_id" to "20261022_new")
+            "prompt.submit" -> { onSent(); after(); ok }
+            else -> JsonObject(emptyMap())
+        }
+    }
+
+    private suspend fun run(api: FakeApi, session: String? = "tg_123", onCreated: suspend (String) -> Unit = {}) =
+        TurnRunner(api, recoverIntervalMs = 10, recoverTimeoutMs = 200).run(session, "hi", onProgress = { _, _ -> }, onCreated = onCreated)
 
     @Test
-    fun completedTurn() = runTest {
-        val api = FakeApi({ emit ->
-            emit(TurnEvent.Started("run_1"))
-            emit(TurnEvent.AssistantCompleted("Done"))
-            emit(TurnEvent.Finished("completed", null))
-        })
-        assertEquals(TurnOutcome.Completed("Done"), run(api))
+    fun continuesAnExistingSessionThroughTheGateway() = runTest {
+        val tools = mutableListOf<String>()
+        val gateway = scripted {
+            emit("message.start")
+            emit("tool.start", obj("tool_id" to "t1", "name" to "terminal"))
+            emit("message.delta", obj("text" to "All"))
+            emit("message.complete", obj("text" to "All good", "status" to "complete"))
+        }
+        val api = FakeApi(mutableListOf(gateway))
+        val outcome = TurnRunner(api).run("tg_123", "hi", onProgress = { _, _ -> }, onTool = { tools += it })
+        assertEquals(TurnOutcome.Completed("All good"), outcome)
+        assertEquals(listOf("terminal"), tools)
+        val (resume, submit) = gateway.calls
+        assertEquals("session.resume", resume.first)
+        assertEquals("tg_123", resume.second["session_id"]!!.jsonPrimitive.content)
+        assertEquals("prompt.submit", submit.first)
+        // The runtime id from session.resume, not the stored id, and never a redirect of a running turn.
+        assertEquals("rt1", submit.second["session_id"]!!.jsonPrimitive.content)
+        assertEquals("hi", submit.second["text"]!!.jsonPrimitive.content)
+        assertEquals(JsonPrimitive(true), submit.second["queued"])
     }
 
     @Test
-    fun failedTurnIsNotSuccess() = runTest {
-        val api = FakeApi({ emit ->
-            emit(TurnEvent.Started("run_1"))
-            emit(TurnEvent.Finished("failed", "iteration_budget"))
-        })
-        assertEquals(TurnOutcome.Failed("iteration_budget"), run(api))
+    fun eventsForOtherSessionsAreIgnored() = runTest {
+        val api = FakeApi(mutableListOf(scripted {
+            emit("message.start", sid = "other")
+            emit("message.complete", obj("text" to "Not ours"), sid = "other")
+            emit("message.start")
+            emit("message.complete", obj("text" to "Ours"))
+        }))
+        assertEquals(TurnOutcome.Completed("Ours"), run(api))
     }
 
     @Test
-    fun foreignSessionIsReadOnly() = runTest {
-        val api = FakeApi({ throw HermesHttpException(409, "permission_denied", "owned elsewhere") })
-        assertEquals(TurnOutcome.ReadOnly, run(api))
+    fun newSessionReportsItsIdBeforeSending() = runTest {
+        var created: String? = null
+        val gateway = scripted {
+            emit("message.start")
+            emit("message.complete", obj("text" to "Hello"))
+        }
+        val api = FakeApi(mutableListOf(gateway))
+        assertEquals(TurnOutcome.Completed("Hello"), run(api, session = null) { created = it })
+        assertEquals("20261022_new", created)
+        assertEquals(listOf("session.create", "prompt.submit"), gateway.calls.map { it.first })
     }
 
     @Test
-    fun connectionRefusedBeforeStartIsSafeFailure() = runTest {
-        val api = FakeApi({ throw ConnectException("refused") })
-        assertEquals(TurnOutcome.Failed("Hermes unreachable"), run(api))
+    fun queuedPromptWaitsForItsOwnTurn() = runTest {
+        val gateway = FakeGateway { method, _, onSent ->
+            when (method) {
+                "session.resume" -> obj("session_id" to "rt1")
+                else -> {
+                    onSent()
+                    emit("message.complete", obj("text" to "The turn we queued behind"))
+                    emit("message.start")
+                    emit("message.complete", obj("text" to "Ours"))
+                    obj("status" to "queued")
+                }
+            }
+        }
+        assertEquals(TurnOutcome.Completed("Ours"), run(FakeApi(mutableListOf(gateway))))
     }
 
     @Test
-    fun droppedStreamWithRunIdIsObservedNotResent() = runTest {
+    fun failedAndInterruptedTurnsAreNotSuccess() = runTest {
+        val failed = FakeApi(mutableListOf(scripted {
+            emit("message.start")
+            emit("message.complete", obj("status" to "error", "error" to "provider 529"))
+        }))
+        assertEquals(TurnOutcome.Failed("provider 529"), run(failed))
+        val interrupted = FakeApi(mutableListOf(scripted {
+            emit("message.start")
+            emit("message.complete", obj("status" to "interrupted"))
+        }))
+        assertEquals(TurnOutcome.Cancelled, run(interrupted))
+    }
+
+    @Test
+    fun refusedResumeIsReadOnlyAndNothingIsSent() = runTest {
+        val gateway = FakeGateway { _, _, _ -> throw GatewayRpcException(4132, "Kanban worker transcript") }
+        val api = FakeApi(mutableListOf(gateway))
+        assertEquals(TurnOutcome.ReadOnly("Kanban worker transcript"), run(api))
+        assertEquals(0, api.submissions)
+    }
+
+    @Test
+    fun rejectedSubmitIsAFailureNotUncertain() = runTest {
+        val gateway = FakeGateway { method, _, _ ->
+            if (method == "session.resume") obj("session_id" to "rt1") else throw GatewayRpcException(4009, "session busy")
+        }
+        assertEquals(TurnOutcome.Failed("Hermes is busy here"), run(FakeApi(mutableListOf(gateway))))
+    }
+
+    @Test
+    fun unreachableOrSignedOutBeforeAnythingIsSent() = runTest {
+        assertEquals(TurnOutcome.Failed("Hermes unreachable"), run(FakeApi(mutableListOf(), openFailure = ConnectException("refused"))))
+        assertEquals(TurnOutcome.AuthFailed, run(FakeApi(mutableListOf(), openFailure = HermesHttpException(401, null, "no"))))
+    }
+
+    @Test
+    fun dropBeforeTheSubmitLeavesIsASafeFailure() = runTest {
+        val gateway = FakeGateway { method, _, _ ->
+            if (method == "session.resume") obj("session_id" to "rt1") else throw GatewayClosedException("closed")
+        }
+        val api = FakeApi(mutableListOf(gateway))
+        assertEquals(TurnOutcome.Failed("Connection lost; not sent"), run(api))
+    }
+
+    @Test
+    fun dropAfterSubmitReadsTheAnswerFromTheTranscriptWithoutResending() = runTest {
         val api = FakeApi(
-            { emit ->
-                emit(TurnEvent.Started("run_1"))
-                throw IOException("reset")
-            },
-            mutableListOf(RunStatus(status = "running"), RunStatus(status = "completed", output = "Late answer")),
+            mutableListOf(scripted { emit("message.start"); drop() }),
+            transcript = listOf(
+                msg("""{"id":10,"role":"user","content":"hi"}"""),
+                msg("""{"id":11,"role":"assistant","content":"Late answer"}"""),
+            ),
         )
         assertEquals(TurnOutcome.Completed("Late answer"), run(api))
         assertEquals(1, api.submissions)
-        assertEquals(2, api.polls)
     }
 
     @Test
-    fun droppedStreamWithoutRunIdIsUncertain() = runTest {
-        val api = FakeApi({ throw IOException("reset mid-request") })
-        assertEquals(TurnOutcome.Uncertain("Connection lost; not resent"), run(api))
+    fun dropAfterSubmitReattachesToTheRunningTurn() = runTest {
+        val rejoin = FakeGateway { _, _, _ ->
+            emit("message.complete", obj("text" to "Finished while we were away"))
+            obj("session_id" to "rt1", "running" to true)
+        }
+        val api = FakeApi(mutableListOf(scripted { emit("message.start"); drop() }, rejoin))
+        assertEquals(TurnOutcome.Completed("Finished while we were away"), run(api))
+        assertEquals(listOf("session.resume"), rejoin.calls.map { it.first })
         assertEquals(1, api.submissions)
     }
 
     @Test
-    fun unknownRunAfterRestartIsUncertain() = runTest {
-        val api = FakeApi(
-            { emit -> emit(TurnEvent.Started("run_1")); throw IOException("gone") },
-            mutableListOf(RunStatus(status = "unknown")),
-        )
-        assertEquals(TurnOutcome.Uncertain("Hermes restarted mid-turn"), run(api))
+    fun dropAfterSubmitWithNoTraceIsUncertainAndNotResent() = runTest {
+        val idle = FakeGateway { _, _, _ -> obj("session_id" to "rt2", "running" to false) }
+        val api = FakeApi(mutableListOf(scripted { drop() }, idle))
+        assertEquals(TurnOutcome.Uncertain("Not sure Hermes got it; not resent"), run(api))
+        assertEquals(1, api.submissions)
+    }
+
+    @Test
+    fun hermesStayingOfflineAfterSubmitIsUncertain() = runTest {
+        val api = FakeApi(mutableListOf(scripted { drop() }))
+        // Every reconnect fails: no gateways left to open.
+        val offline = object : HermesApi by api {
+            var first = true
+            override suspend fun openGateway(): Gateway =
+                if (first) { first = false; api.openGateway() } else throw ConnectException("offline")
+        }
+        val outcome = TurnRunner(offline, recoverIntervalMs = 10, recoverTimeoutMs = 50).run("tg_123", "hi", onProgress = { _, _ -> })
+        assertEquals(TurnOutcome.Uncertain("Lost Hermes mid-turn; not resent"), outcome)
+        assertEquals(1, api.submissions)
     }
 }

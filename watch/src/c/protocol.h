@@ -55,7 +55,7 @@ typedef enum {
   SUBMIT_COMPLETED = 3,
   SUBMIT_FAILED = 4,    // Hermes reported failure; nothing more will happen
   SUBMIT_UNCERTAIN = 5, // connection lost mid-turn; outcome unknown, not resent
-  SUBMIT_READ_ONLY = 6, // Hermes refused: session owned by another surface
+  SUBMIT_READ_ONLY = 6, // Hermes refused to continue this session (e.g. a Kanban worker transcript)
   SUBMIT_CANCELLED = 7,
 } SubmitState;
 

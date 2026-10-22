@@ -2,8 +2,10 @@ package dev.wristbound.companion.core
 
 import android.content.Context
 import android.util.Log
+import dev.wristbound.companion.hermes.AudioClip
+import dev.wristbound.companion.hermes.DashboardAuth
+import dev.wristbound.companion.hermes.DashboardClient
 import dev.wristbound.companion.hermes.HermesApi
-import dev.wristbound.companion.hermes.HermesClient
 import dev.wristbound.companion.hermes.HermesHttpException
 import dev.wristbound.companion.hermes.HermesMessage
 import dev.wristbound.companion.hermes.HermesSession
@@ -18,11 +20,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.io.File
 import java.io.IOException
-import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -48,15 +51,27 @@ class Wristbound private constructor(context: Context) {
 
     private val activeTurns = ConcurrentHashMap<String, Job>()
     private val sessionsById = ConcurrentHashMap<String, HermesSession>()
-    /** Full reply text by message id, for playback. Bounded. */
-    private val replyText = object : LinkedHashMap<String, String>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > 64
+    /** Full reply text and Hermes audio paths by message id, for playback. Bounded. */
+    private val replies = object : LinkedHashMap<String, Reply>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Reply>?) = size > 64
     }
     private val pollMutex = Mutex()
     private var lastPolled: MutableMap<String, Double>? = null
+    private val audioDir = File(app.cacheDir, "audio").apply { mkdirs() }
 
-    private fun api(): HermesApi? =
-        if (settings.isConfigured) runCatching { HermesClient(settings.baseUrl, settings.apiKey) }.getOrNull() else null
+    private data class Reply(val text: String, val audio: List<String>)
+
+    @Volatile private var client: DashboardClient? = null
+
+    /** The dashboard client for the configured URL; rebuilt when the URL changes. */
+    fun client(): DashboardClient? {
+        val url = settings.baseUrl
+        if (url.isBlank()) return null
+        client?.let { if (it.auth.base.toString().trimEnd('/') == url.trimEnd('/')) return it }
+        return runCatching { DashboardClient(DashboardAuth(url, settings)) }.getOrNull().also { client = it }
+    }
+
+    private fun api(): DashboardClient? = if (settings.isConfigured) client() else null
 
     // -- watch lifecycle ------------------------------------------------------------------------
 
@@ -101,7 +116,7 @@ class Wristbound private constructor(context: Context) {
     // -- sessions & history ---------------------------------------------------------------------
 
     private suspend fun fetchSessions(api: HermesApi): List<HermesSession> {
-        val sessions = api.listSessions(100, null)
+        val sessions = api.listSessions(100)
         sessions.forEach { sessionsById[it.id] = it }
         state.baseline(sessions.associate { it.id to it.activity })
         return sessions
@@ -160,8 +175,10 @@ class Wristbound private constructor(context: Context) {
         watch.sendAll(pages)
     }
 
-    private fun rememberReplies(raw: List<HermesMessage>) = synchronized(replyText) {
-        raw.filter { it.isFinalAssistantText }.forEach { replyText[it.stableId] = Text.forWatch(it.text) }
+    private fun rememberReplies(raw: List<HermesMessage>) = synchronized(replies) {
+        raw.forEachIndexed { i, m ->
+            if (m.isFinalAssistantText) replies[m.stableId] = Reply(Text.forWatch(m.text), SessionMapper.audioFor(raw, i))
+        }
     }
 
     // -- submissions ----------------------------------------------------------------------------
@@ -180,60 +197,68 @@ class Wristbound private constructor(context: Context) {
     }
 
     private suspend fun newSession(firstMessage: String) {
-        val api = api() ?: return submitState(null, Protocol.Submit.FAILED, "Set up phone app")
+        if (api() == null) return submitState(null, Protocol.Submit.FAILED, "Set up phone app")
         if (isDuplicate(NEW_SESSION_TARGET, firstMessage)) return
-        val session = try {
-            api.createSession(firstMessage.lineSequence().first().take(40))
-        } catch (e: IOException) {
-            return submitState(null, Protocol.Submit.FAILED, "Could not create session")
-        }
-        sessionsById[session.id] = session
-        state.openSessionId = session.id
-        watch.send(WatchCodec.sessionOpened(WatchSession(session.id, session.displayTitle, 0)))
-        submit(session.id, firstMessage)
+        startTurn(null, firstMessage)
     }
 
     private suspend fun submit(sessionId: String, text: String) {
-        val api = api() ?: return submitState(sessionId, Protocol.Submit.FAILED, "Set up phone app")
+        if (api() == null) return submitState(sessionId, Protocol.Submit.FAILED, "Set up phone app")
         if (isDuplicate(sessionId, text)) return
         if (activeTurns.containsKey(sessionId)) {
             return submitState(sessionId, Protocol.Submit.FAILED, "Hermes still working here")
         }
-        val title = sessionsById[sessionId]?.displayTitle ?: "Hermes"
+        startTurn(sessionId, text)
+    }
+
+    /** Run one turn in [existing], or in a new session when it is null. */
+    private fun startTurn(existing: String?, text: String) {
+        val api = api() ?: return
+        val key = existing ?: NEW_SESSION_TARGET
         val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            var sessionId = existing
+            val title = existing?.let { sessionsById[it]?.displayTitle } ?: Text.forWatch(text.lineSequence().first().take(40))
             val tool = settings.toolActivity
             val outcome = TurnRunner(api).run(
-                sessionId, text, UUID.randomUUID().toString(),
+                existing, text,
                 onProgress = { s, d -> submitState(sessionId, s, d) },
                 onTool = { name ->
                     if (tool != ToolActivity.HIDDEN) submitState(sessionId, Protocol.Submit.WORKING, "Using $name")
                     if (tool == ToolActivity.NOTIFY && !watchOpen) notifier.toolActivity(title, name)
                 },
+                onCreated = { id ->
+                    sessionId = id
+                    sessionsById[id] = HermesSession(id, source = "webui", title = title)
+                    state.openSessionId = id
+                    currentCoroutineContext()[Job]?.let { activeTurns[id] = it }
+                    watch.send(WatchCodec.sessionOpened(WatchSession(id, title, 0)))
+                },
             )
             notifier.clearToolActivity()
+            val sid = sessionId
             when (outcome) {
-                is TurnOutcome.Completed -> submitState(sessionId, Protocol.Submit.COMPLETED, "Reply received")
-                is TurnOutcome.Failed -> problem(sessionId, title, Protocol.Submit.FAILED, outcome.detail)
-                TurnOutcome.Cancelled -> submitState(sessionId, Protocol.Submit.CANCELLED, "Cancelled")
-                TurnOutcome.ReadOnly -> {
-                    state.markReadOnly(sessionId)
-                    problem(sessionId, title, Protocol.Submit.READ_ONLY, "Reply from its own app")
+                is TurnOutcome.Completed -> submitState(sid, Protocol.Submit.COMPLETED, "Reply received")
+                is TurnOutcome.Failed -> problem(sid, title, Protocol.Submit.FAILED, outcome.detail)
+                TurnOutcome.Cancelled -> submitState(sid, Protocol.Submit.CANCELLED, "Cancelled")
+                is TurnOutcome.ReadOnly -> {
+                    sid?.let { state.markReadOnly(it) }
+                    problem(sid, title, Protocol.Submit.READ_ONLY, outcome.detail.take(60))
                 }
-                is TurnOutcome.Uncertain -> problem(sessionId, title, Protocol.Submit.UNCERTAIN, outcome.detail)
-                TurnOutcome.AuthFailed -> problem(sessionId, title, Protocol.Submit.FAILED, "Hermes auth failed")
+                is TurnOutcome.Uncertain -> problem(sid, title, Protocol.Submit.UNCERTAIN, outcome.detail)
+                TurnOutcome.AuthFailed -> problem(sid, title, Protocol.Submit.FAILED, "Sign in to Hermes again")
             }
             // Read back the authoritative transcript: it carries the real message ids.
-            if (outcome is TurnOutcome.Completed || outcome is TurnOutcome.Uncertain) {
-                deliverLatestReply(api, sessionId, title)
-                if (watchOpen && state.openSessionId == sessionId) pushMessages(sessionId)
+            if (sid != null && (outcome is TurnOutcome.Completed || outcome is TurnOutcome.Uncertain)) {
+                deliverLatestReply(api, sid, title)
+                if (watchOpen && state.openSessionId == sid) pushMessages(sid)
             }
         }
-        job.invokeOnCompletion { activeTurns.remove(sessionId, job) }
-        activeTurns[sessionId] = job
+        job.invokeOnCompletion { activeTurns.values.removeAll { it === job } }
+        activeTurns[key] = job
         job.start()
     }
 
-    private suspend fun problem(sessionId: String, title: String, s: Protocol.Submit, detail: String) {
+    private suspend fun problem(sessionId: String?, title: String, s: Protocol.Submit, detail: String) {
         submitState(sessionId, s, detail)
         if (!watchOpen) notifier.problem(title, detail)
     }
@@ -332,21 +357,53 @@ class Wristbound private constructor(context: Context) {
 
     // -- playback -------------------------------------------------------------------------------
 
+    /**
+     * Play one exact reply. In order: audio Hermes attached to it (its text-to-speech tool
+     * output), then the reply spoken in Hermes' own configured voice, then the phone's voice.
+     */
     suspend fun play(sessionId: String, messageId: String, allowSpeaker: Boolean) {
         lastAllowSpeaker = allowSpeaker
-        val text = textFor(sessionId, messageId)
-        if (text == null) {
+        val reply = replyFor(sessionId, messageId)
+        if (reply == null) {
             onPlaybackState(messageId, Protocol.Playback.ERROR, "Reply not found")
             return
         }
-        playback.play(messageId, text, allowSpeaker)
+        if (!allowSpeaker && !playback.hasPrivateOutput()) {
+            onPlaybackState(messageId, Protocol.Playback.NEEDS_SPEAKER, "No headphones")
+            return
+        }
+        val api = api()
+        var clip: Pair<AudioClip, String>? = null
+        if (api != null && reply.audio.isNotEmpty()) {
+            onPlaybackState(messageId, Protocol.Playback.IDLE, "Getting Hermes audio")
+            clip = reply.audio.firstNotNullOfOrNull { path ->
+                runCatching { api.fetchAudio(path, audioDir) }.onFailure { Log.d(TAG, "audio fetch failed: ${it.message}") }.getOrNull()
+            }?.let { it to "Playing Hermes audio" }
+        }
+        if (clip == null && api != null && settings.hermesVoice) {
+            onPlaybackState(messageId, Protocol.Playback.IDLE, "Getting Hermes voice")
+            clip = runCatching { api.speak(Text.forSpeech(reply.text), messageId, audioDir) }
+                .onFailure { Log.d(TAG, "Hermes voice failed: ${it.message}") }.getOrNull()
+                ?.let { it to "Playing Hermes voice" }
+        }
+        pruneAudio()
+        if (clip != null) playback.playFile(messageId, clip.first.file, allowSpeaker, clip.second)
+        else playback.play(messageId, Text.forSpeech(reply.text), allowSpeaker)
     }
 
-    private suspend fun textFor(sessionId: String, messageId: String): String? {
-        synchronized(replyText) { replyText[messageId] }?.let { return it }
+    private suspend fun textFor(sessionId: String, messageId: String): String? = replyFor(sessionId, messageId)?.text
+
+    private suspend fun replyFor(sessionId: String, messageId: String): Reply? {
+        synchronized(replies) { replies[messageId] }?.let { return it }
         val raw = runCatching { api()?.recentMessages(sessionId, 40) }.getOrNull() ?: return null
         rememberReplies(raw)
-        return synchronized(replyText) { replyText[messageId] }
+        return synchronized(replies) { replies[messageId] }
+    }
+
+    /** Keep the audio cache small: the newest files only. */
+    private fun pruneAudio() {
+        val files = audioDir.listFiles()?.sortedByDescending { it.lastModified() } ?: return
+        files.drop(MAX_AUDIO_FILES).forEach { it.delete() }
     }
 
     private fun onPlaybackState(messageId: String?, s: Protocol.Playback, detail: String) {
@@ -357,6 +414,7 @@ class Wristbound private constructor(context: Context) {
         private const val TAG = "Wristbound"
         private const val DUPLICATE_WINDOW_MS = 15_000L
         private const val NEW_SESSION_TARGET = "\u0000new"
+        private const val MAX_AUDIO_FILES = 24
 
         @Volatile private var instance: Wristbound? = null
 

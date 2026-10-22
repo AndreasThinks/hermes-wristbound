@@ -9,8 +9,9 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * Client-side views of the Hermes API server's session surface (`/api/sessions*`).
- * Only fields Wristbound uses are modelled; unknown fields are ignored. See docs/HERMES_API.md.
+ * Client-side views of the Hermes dashboard's session surface (`/api/sessions*`), the same rows
+ * the desktop app reads. Only fields Wristbound uses are modelled; unknown fields are ignored.
+ * See docs/HERMES_API.md.
  */
 @Serializable
 data class HermesSession(
@@ -39,12 +40,9 @@ data class HermesSession(
 
 @Serializable
 data class SessionList(
-    val data: List<HermesSession> = emptyList(),
-    val has_more: Boolean = false,
+    val sessions: List<HermesSession> = emptyList(),
+    val total: Int? = null,
 )
-
-@Serializable
-data class SessionEnvelope(val session: HermesSession)
 
 @Serializable
 data class HermesMessage(
@@ -90,30 +88,52 @@ data class HermesMessage(
     val isFinalAssistantText: Boolean
         get() = role == "assistant" && !hasToolCalls && text.isNotBlank()
 
-    /** References to server-side audio that Hermes emitted as MEDIA tags. */
+    /**
+     * Server paths of audio Hermes produced, from `MEDIA:<path>` tags. The text-to-speech tool
+     * returns one in its tool result, and the agent usually repeats it in the reply.
+     */
     val audioRefs: List<String>
-        get() = AUDIO_TAG.findAll(text).map { it.groupValues[1] }.toList()
+        get() = AUDIO_TAG.findAll(text.replace("\\/", "/"))
+            .map { it.groupValues[1] }.distinct().toList()
 }
 
-private val AUDIO_TAG = Regex("""MEDIA:(\S+\.(?:mp3|ogg|opus|wav|m4a|aac|flac))""", RegexOption.IGNORE_CASE)
+private val AUDIO_TAG = Regex(
+    """MEDIA:([^\s"'<>\\]+?\.(?:mp3|ogg|opus|wav|m4a|aac|flac))(?![\w.])""",
+    RegexOption.IGNORE_CASE,
+)
 
 @Serializable
 data class MessageList(
     val session_id: String? = null,
-    val data: List<HermesMessage> = emptyList(),
+    val messages: List<HermesMessage> = emptyList(),
+)
+
+/** `GET /api/status`: whether the dashboard requires sign-in, and which flows it offers. */
+@Serializable
+data class DashboardStatus(
+    val auth_required: Boolean = false,
+    val auth_providers: List<String> = emptyList(),
+    val auth_flows: List<String> = emptyList(),
+    val version: String? = null,
+)
+
+/** One interactive sign-in provider from `GET /api/auth/providers`. */
+@Serializable
+data class AuthProvider(
+    val name: String,
+    val display_name: String? = null,
+    val supports_password: Boolean = false,
 )
 
 @Serializable
-data class RunStatus(
-    val run_id: String? = null,
-    val status: String? = null,
-    val session_id: String? = null,
-    val output: String? = null,
-    val error: String? = null,
+data class AuthProviderList(val providers: List<AuthProvider> = emptyList())
+
+/** Bearer tokens from `/auth/native/token` and `/auth/native/refresh`. [expires_at] is epoch seconds. */
+@Serializable
+data class NativeTokens(
+    val access_token: String,
+    val refresh_token: String = "",
+    val expires_at: Double = 0.0,
+    val provider: String = "",
+    val user_id: String = "",
 )
-
-@Serializable
-data class ErrorEnvelope(val error: ErrorBody? = null)
-
-@Serializable
-data class ErrorBody(val message: String? = null, val code: String? = null, val type: String? = null)

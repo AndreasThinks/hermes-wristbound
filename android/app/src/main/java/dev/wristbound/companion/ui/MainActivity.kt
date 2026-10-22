@@ -1,7 +1,9 @@
 package dev.wristbound.companion.ui
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
@@ -22,8 +24,10 @@ import androidx.lifecycle.lifecycleScope
 import dev.wristbound.companion.core.NotifyScope
 import dev.wristbound.companion.core.ToolActivity
 import dev.wristbound.companion.core.Wristbound
-import dev.wristbound.companion.hermes.HermesClient
+import dev.wristbound.companion.hermes.Credentials
 import dev.wristbound.companion.hermes.HermesHttpException
+import dev.wristbound.companion.hermes.LoopbackReceiver
+import dev.wristbound.companion.hermes.SignInException
 import dev.wristbound.companion.sync.SyncService
 import kotlinx.coroutines.launch
 
@@ -42,29 +46,82 @@ class MainActivity : AppCompatActivity() {
         }
 
         column.addView(heading("Hermes connection"))
-        column.addView(note("Use your Hermes API server address on your tailnet, e.g. https://hermes.tailnet-name.ts.net:8642. The key is API_SERVER_KEY and is stored encrypted on this phone only."))
+        column.addView(note("Wristbound talks to the Hermes dashboard, like the desktop app and Hermes-Relay, so Telegram and desktop sessions can be read and continued. Use the dashboard address on your tailnet, e.g. https://hermes.tailnet-name.ts.net:10443 (tailscale serve in front of port 9119)."))
         val url = EditText(this).apply {
-            hint = "Hermes URL"
+            hint = "Hermes dashboard URL"
             inputType = InputType.TYPE_TEXT_VARIATION_URI
             setText(s.baseUrl)
         }
-        val key = EditText(this).apply {
-            hint = if (s.apiKey.isNotEmpty()) "API key saved (enter to replace)" else "API key"
+        column.addView(url)
+        status = note(connectionSummary())
+        column.addView(status)
+
+        column.addView(note("Signed-in dashboards: sign in with your dashboard username and password, or in the browser for other providers."))
+        val user = EditText(this).apply {
+            hint = "Username"
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        val pass = EditText(this).apply {
+            hint = "Password"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
-        column.addView(url)
-        column.addView(key)
-        status = note(if (s.isConfigured) "Saved." else "Not configured.")
+        column.addView(user)
+        column.addView(pass)
         column.addView(Button(this).apply {
-            text = "Save and test"
+            text = "Sign in"
             setOnClickListener {
                 s.baseUrl = url.text.toString()
-                if (key.text.isNotBlank()) s.apiKey = key.text.toString()
-                key.text.clear()
+                val u = user.text.toString()
+                val p = pass.text.toString()
+                pass.text.clear()
+                signInWithPassword(u, p)
+            }
+        })
+        column.addView(Button(this).apply {
+            text = "Sign in with browser"
+            setOnClickListener {
+                s.baseUrl = url.text.toString()
+                signInWithBrowser()
+            }
+        })
+
+        column.addView(note("Loopback dashboards (no sign-in page): paste the session token the desktop app sets as HERMES_DASHBOARD_SESSION_TOKEN."))
+        val token = EditText(this).apply {
+            hint = "Session token"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        column.addView(token)
+        column.addView(Button(this).apply {
+            text = "Use session token"
+            setOnClickListener {
+                s.baseUrl = url.text.toString()
+                val t = token.text.toString()
+                token.text.clear()
+                val auth = controller.client()?.auth
+                when {
+                    auth == null -> status.text = "Invalid URL."
+                    t.isBlank() -> status.text = "Enter the token."
+                    else -> {
+                        auth.useSessionToken(t)
+                        testConnection()
+                    }
+                }
+            }
+        })
+        column.addView(Button(this).apply {
+            text = "Test connection"
+            setOnClickListener {
+                s.baseUrl = url.text.toString()
                 testConnection()
             }
         })
-        column.addView(status)
+        column.addView(Button(this).apply {
+            text = "Sign out"
+            setOnClickListener {
+                controller.client()?.auth?.signOut()
+                status.text = connectionSummary()
+            }
+        })
 
         column.addView(heading("Watch"))
         column.addView(switch("Show Telegram sessions", s.includeTelegram) { s.includeTelegram = it })
@@ -75,6 +132,10 @@ class MainActivity : AppCompatActivity() {
             text = "Open Wristbound on watch"
             setOnClickListener { lifecycleScope.launch { controller.openWatchApp() } }
         })
+
+        column.addView(heading("Playback"))
+        column.addView(switch("Use Hermes' voice", s.hermesVoice) { s.hermesVoice = it })
+        column.addView(note("Replies with audio Hermes generated play that audio. Other replies are spoken in the voice set under tts: in Hermes, or by the phone when this is off or Hermes cannot speak."))
 
         column.addView(heading("Notifications"))
         column.addView(switch("Notify final replies", s.notifyReplies) { s.notifyReplies = it })
@@ -114,27 +175,88 @@ class MainActivity : AppCompatActivity() {
         if (s.backgroundSync) SyncService.start(this)
     }
 
+    private fun connectionSummary(): String = when (controller.settings.load()) {
+        is Credentials.Native -> "Signed in."
+        is Credentials.SessionToken -> "Using a session token."
+        null -> if (controller.settings.baseUrl.isBlank()) "Not configured." else "Not signed in."
+    }
+
+    private fun signInWithPassword(username: String, password: String) {
+        val auth = controller.client()?.auth ?: run { status.text = "Invalid URL."; return }
+        if (username.isBlank() || password.isBlank()) {
+            status.text = "Enter a username and password."
+            return
+        }
+        status.text = "Signing in..."
+        lifecycleScope.launch {
+            try {
+                val dashboard = auth.status()
+                if (!dashboard.auth_required) {
+                    status.text = "This dashboard has no sign-in page. Use its session token instead."
+                    return@launch
+                }
+                val provider = auth.providers().firstOrNull { it.supports_password }
+                if (provider == null) {
+                    status.text = "This dashboard has no password sign-in. Use Sign in with browser."
+                    return@launch
+                }
+                auth.signInWithPassword(provider.name, username, password)
+                testConnection()
+            } catch (e: Exception) {
+                status.text = describe(e)
+            }
+        }
+    }
+
+    private fun signInWithBrowser() {
+        val auth = controller.client()?.auth ?: run { status.text = "Invalid URL."; return }
+        status.text = "Finish signing in in the browser..."
+        lifecycleScope.launch {
+            try {
+                val dashboard = auth.status()
+                if (!dashboard.auth_required) {
+                    status.text = "This dashboard has no sign-in page. Use its session token instead."
+                    return@launch
+                }
+                val receiver = LoopbackReceiver()
+                val pending = auth.beginBrowserSignIn(receiver.redirectUri)
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(pending.url)))
+                val result = receiver.await()
+                auth.completeBrowserSignIn(pending, result.code, result.state)
+                testConnection()
+            } catch (e: Exception) {
+                status.text = describe(e)
+            }
+        }
+    }
+
     private fun testConnection() {
         val s = controller.settings
         if (!s.isConfigured) {
-            status.text = "Enter a URL and key."
+            status.text = if (s.baseUrl.isBlank()) "Enter the dashboard URL." else "Sign in first."
             return
         }
         status.text = "Testing..."
         lifecycleScope.launch {
             status.text = try {
-                val client = HermesClient(s.baseUrl, s.apiKey)
-                val sessions = client.listSessions(5, null)
+                val client = controller.client() ?: throw IllegalArgumentException()
+                val sessions = client.listSessions(20)
+                // Prove the gateway socket too: that is what sends replies.
+                client.openGateway().close()
                 controller.pushSessions()
-                "Connected. ${sessions.size} recent sessions visible."
-            } catch (e: HermesHttpException) {
-                if (e.isAuth) "Hermes rejected the key." else "Hermes error: ${e.message}"
-            } catch (e: IllegalArgumentException) {
-                "Invalid URL."
+                val telegram = sessions.count { it.isTelegram }
+                "Connected. ${sessions.size} recent sessions, $telegram from Telegram."
             } catch (e: Exception) {
-                "Cannot reach Hermes: ${e.message}. Is Tailscale connected?"
+                describe(e)
             }
         }
+    }
+
+    private fun describe(e: Exception): String = when (e) {
+        is SignInException -> e.message.orEmpty()
+        is HermesHttpException -> if (e.isAuth) "Hermes rejected the sign-in. Sign in again." else "Hermes error: ${e.message}"
+        is IllegalArgumentException -> "Invalid URL."
+        else -> "Cannot reach Hermes: ${e.message}. Is Tailscale connected?"
     }
 
     private fun requestNotificationPermission() {

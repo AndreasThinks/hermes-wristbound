@@ -1,36 +1,67 @@
 # Hermes API findings
 
-Milestone 1 asked for the Hermes capabilities Wristbound can use, verified rather than inferred from the desktop UI. These notes come from reading the Hermes Agent source and docs (`gateway/platforms/api_server.py` and `website/docs/user-guide/features/api-server.md`, upstream `main` as of October 2026). They have **not** yet been checked against a running Hermes; the device test plan in [TESTING.md](TESTING.md) covers that.
+These notes come from reading the Hermes Agent source (upstream `main`, October 2026) and the Hermes-Relay Android client, which talks to Hermes the way the desktop app does. They have **not** yet been checked against a running Hermes; the device test plan in [TESTING.md](TESTING.md) covers that.
+
+## Which Hermes surface, and why
+
+Hermes has two network surfaces:
+
+- The **API server** (`hermes gateway` with `API_SERVER_ENABLED=true`, port 8642, `Authorization: Bearer $API_SERVER_KEY`). It is OpenAI-compatible and has REST session routes, but it refuses turns in sessions another surface owns (`409 permission_denied` for Telegram, CLI, desktop and other sessions), and it does not serve audio files.
+- The **dashboard** (`hermes dashboard`, port 9119). This is what the desktop app and Hermes-Relay use. Its gateway WebSocket (`/api/ws`) drives the same `tui_gateway` JSON-RPC the terminal UI uses, which can resume and continue any stored session, and it serves Hermes' audio. Hermes' own API docs point here: "to work on a chat from another surface, attach through the gateway WebSocket (a `prompt.submit` on the shared session)".
+
+The first Wristbound slice used the API server, which is why Telegram sessions were read-only and Hermes audio was out of reach. The companion now uses the dashboard only, so both work. The API server is no longer needed.
+
+## Authentication
+
+`GET /api/status` (public) reports `auth_required` and `auth_flows`. The dashboard is in one of two modes:
+
+- **Gated** (any non-loopback bind, including a tailnet `dashboard.public_url`). Sign-in goes through providers listed at `GET /api/auth/providers`. Native apps use the RFC 8252 flow, which Wristbound implements as the desktop and Hermes-Relay do:
+  1. `GET /auth/native/authorize?code_challenge=…&code_challenge_method=S256&redirect_uri=http://127.0.0.1:<port>/callback&state=…&provider=…`
+  2. The user signs in. For password providers (`dashboard.basic_auth`) the companion posts `POST /auth/password-login` itself, carrying the cookie step 1 set, and reads the code out of the returned `next` URL; no browser is involved. For OAuth providers the system browser runs the sign-in and redirects to a one-shot listener on the phone's loopback interface.
+  3. `POST /auth/native/token {code, code_verifier}` returns `access_token`, `refresh_token`, `expires_at`.
+  4. REST calls send `Authorization: Bearer <access_token>`. Before expiry, or after a 401, the companion rotates with `POST /auth/native/refresh`. Refreshes are serialised, because Hermes revokes a session whose refresh token is replayed. A 401 from refresh means sign-in is needed again.
+- **Loopback** (no sign-in page). Every `/api/*` route takes the dashboard session token in `X-Hermes-Session-Token`. The desktop app fixes it with `HERMES_DASHBOARD_SESSION_TOKEN`; otherwise it changes on every restart.
+
+The gateway socket authenticates on the upgrade: in gated mode with a single-use ticket from `POST /api/auth/ws-ticket` (30 s TTL, `?ticket=`), in loopback mode with `?token=<session token>`.
+
+Credentials are stored encrypted with an Android Keystore key and never sent to the watch.
 
 ## Surface used
 
-Wristbound talks only to the Hermes **API server** (`hermes gateway` with `API_SERVER_ENABLED=true`, default `127.0.0.1:8642`). Every route needs `Authorization: Bearer $API_SERVER_KEY`. Hermes refuses to start the API server with a missing or weak key (under 16 characters).
+| Need | Route | Notes |
+|------|-------|-------|
+| List sessions with origin | `GET /api/sessions?order=recent&limit=N` | `{"sessions":[...]}`. Rows carry `id`, `source` (`telegram`, `cli`, `webui`, ...), `title`, `preview`, `last_active`, `archived`, `is_active`. Telegram sessions are included. |
+| Read recent history | `GET /api/sessions/{id}/messages?order=latest&limit=N&inline_images=false` | `{"messages":[...]}`; rows carry integer `id`, `role`, `content`, `tool_calls`, `tool_name`, `timestamp`. Includes compression ancestors, matching what the desktop shows. |
+| Open the gateway | `GET /api/ws` (WebSocket) | Newline-delimited JSON-RPC 2.0. The server sends `gateway.ready` first; clients send `gateway.ping` every 15 s. Events arrive as `{"method":"event","params":{"type","session_id","payload"}}`. |
+| Attach to a stored session | `session.resume {session_id, omit_messages: true}` | Returns a runtime `session_id` for this socket, and `running` if a turn is live. Works for Telegram-origin sessions. Joins an already-live session rather than forking it. Refusals: `4007` not found, `4130` too long, `4132` Kanban worker transcript. |
+| Start a session | `session.create {source: "webui"}` | Returns the runtime `session_id` and the `stored_session_id`. The stored row is written on the first prompt. |
+| Send a turn | `prompt.submit {session_id, text, queued: true}` | Acks `{"status":"streaming"}`, or `"queued"` if a turn is already running there. `queued: true` waits behind that turn; without it Hermes' default is to redirect the running turn. |
+| Turn events | `message.start`, `message.delta`, `tool.start`, `tool.complete`, `message.complete` | `message.complete` carries `text` and `status` (`complete`, `error`, `interrupted`). Approval, clarification and secret prompts arrive as server requests (`approval.request`, ...). The watch says "Needs an answer on desktop"; it cannot answer them. |
+| Hermes-generated audio | `GET /api/files/stream?path=<server path>` | Streams the file a `MEDIA:<path>` tag names (the text-to-speech tool writes them under `~/.hermes/cache/audio/`). Audio extensions only. The desktop and Hermes-Relay use the same managed-files routes. |
+| Speak a reply in Hermes' voice | `POST /api/audio/speak {text}` | Runs the `tts:` provider chain from Hermes' config and returns a `data:` URL. The desktop's read-aloud uses it. |
 
-| Need | Route | Status |
-|------|-------|--------|
-| List sessions with origin | `GET /api/sessions?limit=&offset=` | Verified in source. Rows carry `id`, `source` (e.g. `telegram`, `api_server`, `cli`), `title`, `preview`, `last_active`, `archived`, `hidden`, `is_internal_child`. Ordered by last activity. |
-| Read recent history | `GET /api/sessions/{id}/messages?order=latest&limit=N&inline_images=false` | Verified. Messages carry integer `id`, `role`, `content` (string or multimodal parts), `tool_calls`, `tool_name`, `timestamp`. |
-| Create a session | `POST /api/sessions` `{"source":"api_server","title":...}` | Verified. |
-| Send a message and stream the turn | `POST /api/sessions/{id}/chat/stream` `{"message": "..."}` | Verified. SSE events: `run.started`, `assistant.delta`, `assistant.commentary`, `tool.started/completed/failed`, `assistant.completed`, then exactly one of `run.completed`, `run.failed`, `run.cancelled`, then `done`. Every payload has `run_id` and `session_id`. `: keepalive` comments every 10 s. |
-| Recover a turn after the stream drops | `GET /v1/runs/{run_id}` | Verified. Session-stream runs record their status and `output`; terminal statuses are kept about an hour. A status of `unknown` means Hermes restarted mid-turn. |
-| Health | `GET /health` (no auth) | Verified. |
+## Turn safety
 
-## Gaps and how Wristbound handles them
+A turn is submitted at most once. The companion marks the prompt as sent as soon as `prompt.submit` is handed to the socket. If the socket fails after that, it never resends; it recovers by looking:
 
-**Continuing Telegram-origin (and other foreign) sessions.** The API docs say API routes "cannot bind a session that another surface owns — a CLI, TUI, Desktop, ACP or messaging conversation" and answer `409 permission_denied`. The documented route for that is the gateway WebSocket (`prompt.submit` on a shared session), which is a different protocol from the REST surface. Wristbound attempts the turn once; on `409 permission_denied` it marks the session read-only on the watch and tells the user to reply from the session's own app. Nothing is resent. Reading these sessions works.
-*Next step:* decide whether to add a WebSocket attach client to the companion, or ask Hermes upstream for a REST submit route that queues into the owning surface.
+1. The transcript: if the user message is there with a final answer after it, that is the reply.
+2. Re-attaching: a new socket and `session.resume` join the live session if the turn is still running (Hermes keeps a detached turn running while it is producing output), and the rest of the turn streams in.
+3. Otherwise the watch shows *uncertain* with a short reason.
 
-**Generated audio.** The API server replaces `MEDIA:` tags with inline data only for images. Audio files (TTS output in `~/.hermes/audio_cache/`) stay server paths, and there is no authenticated route that serves them to a remote client. The dashboard's `/api/audio/speak` uses dashboard auth, not the API key. Wristbound therefore speaks the exact selected reply with the phone's TextToSpeech engine on the current audio route, and flags replies that had Hermes audio attached.
-*Next step:* a small authenticated media route (or an upstream change) would let the phone fetch the real audio for a given message id.
+A drop before the prompt left the phone is reported as a plain failure, since nothing was sent.
 
-**Push delivery.** There is no session-activity event stream on the API server, so replies that arrive through Telegram, Ringbearer or the desktop are found by polling `GET /api/sessions` and reading new messages for sessions whose `last_active` advanced. Polling runs inside an optional foreground service, at a user-chosen interval (30 s to 5 min). Replies to turns sent from the watch arrive over the live stream and need no polling.
+When a turn in a Telegram session finishes, the reply is stored in that session like any other turn. It is not posted back into the Telegram chat; the desktop app behaves the same way.
 
-**Idempotent submission.** `Idempotency-Key` is documented for `/v1/chat/completions`, `/v1/responses` and `/v1/runs`, not for the session chat route. Wristbound sends a fresh key anyway (harmless), but its safety rests on never resubmitting: after a broken stream it only observes the run by id, and reports *uncertain* when it has no run id.
+## Remaining limits
 
-**Unread state.** Sessions have a `PATCH ... {"unread": bool}` flag, but list responses do not return it. Wristbound keeps its own per-session "seen up to" timestamp on the phone instead.
+**Push delivery.** The gateway socket broadcasts `sessions.changed`, but holding a socket open on a locked phone is fragile, so replies that arrive through Telegram, Ringbearer or the desktop are still found by polling `GET /api/sessions` from the optional foreground service (30 s to 5 min). Replies to turns sent from the watch arrive live over the socket.
+
+**Server prompts.** Tool approvals, clarifications and sudo or secret prompts need another client (desktop, terminal UI or Telegram) to answer. The turn waits; the watch shows that it is waiting.
+
+**Unread state.** List rows do not carry a per-client unread flag, so the phone keeps its own "seen up to" timestamp per session.
 
 ## Security notes
 
-- Hermes binds to loopback by default; `API_SERVER_HOST=0.0.0.0` exposes terminal-capable agent access to the network. Prefer `tailscale serve --https=443 http://127.0.0.1:8642` so the server stays on loopback and the phone reaches it over the tailnet with a certificate.
+- Keep the dashboard on loopback and publish it to the tailnet with Tailscale Serve, as Hermes-Relay recommends: `tailscale serve --bg --https=10443 http://127.0.0.1:9119`. Setting `dashboard.public_url` to that address turns on the sign-in gate.
 - The companion refuses cleartext HTTP except to `*.ts.net` MagicDNS names, where WireGuard already encrypts the link.
-- The API key is stored encrypted with an Android Keystore key, never sent to the watch, and app data is excluded from backups.
+- The browser sign-in listener binds only `127.0.0.1`, accepts one redirect, and checks the `state` it sent. The PKCE verifier never leaves the phone.

@@ -1,7 +1,7 @@
 package dev.wristbound.companion.core
 
 import android.content.Context
-import dev.wristbound.companion.hermes.HermesClient
+import dev.wristbound.companion.hermes.HermesHttp
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
@@ -10,13 +10,13 @@ import java.io.File
 
 /**
  * Small, bounded on-device state: unread baselines, notified message ids (for deduplication),
- * sessions known to be read-only through the API, and a cache of what the watch last showed.
+ * sessions Hermes refused to continue, and a cache of what the watch last showed.
  * Everything lives in app-private storage, excluded from backups.
  */
 class LocalState(context: Context) {
     private val prefs = context.getSharedPreferences("state", Context.MODE_PRIVATE)
     private val cacheDir = File(context.noBackupFilesDir, "cache").apply { mkdirs() }
-    private val json = HermesClient.json
+    private val json = HermesHttp.json
 
     @Synchronized
     fun lastSeen(): Map<String, Double> = readMap("last_seen")

@@ -4,7 +4,10 @@ package dev.wristbound.companion.pebble
 object Text {
     private const val ELLIPSIS = "…"
 
+    private val AUDIO_TAG = Regex("""MEDIA:\S+\.(?:mp3|ogg|opus|wav|m4a|aac|flac)\b""", RegexOption.IGNORE_CASE)
     private val MEDIA_TAG = Regex("""MEDIA:\S+""")
+    private val VOICE_MARKER = Regex("""\[\[audio_as_voice]]""")
+    private val PLACEHOLDER = Regex("""\[(?:image|media|audio)]""")
     private val IMAGE_MD = Regex("""!\[[^\]]*]\([^)]*\)""")
     private val LINK_MD = Regex("""\[([^\]]+)]\([^)]*\)""")
     private val FENCE = Regex("""```[^\n]*\n?""")
@@ -18,6 +21,8 @@ object Text {
      */
     fun forWatch(raw: String): String = raw
         .replace(IMAGE_MD, "[image]")
+        .replace(VOICE_MARKER, "")
+        .replace(AUDIO_TAG, "[audio]")
         .replace(MEDIA_TAG, "[media]")
         .replace(LINK_MD, "$1")
         .replace(FENCE, "")
@@ -26,6 +31,9 @@ object Text {
         .replace("\r\n", "\n")
         .replace(BLANK_LINES, "\n\n")
         .trim()
+
+    /** Watch text made fit to be read aloud: placeholders for media are dropped. */
+    fun forSpeech(watchText: String): String = watchText.replace(PLACEHOLDER, "").replace(BLANK_LINES, "\n\n").trim()
 
     /**
      * Fit [value] into [budget] UTF-8 bytes, leaving room for the C string terminator, without

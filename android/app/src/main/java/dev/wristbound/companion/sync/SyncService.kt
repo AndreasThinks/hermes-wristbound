@@ -17,9 +17,9 @@ import kotlinx.coroutines.launch
 
 /**
  * Optional foreground service that keeps the companion alive while the phone is locked, so
- * in-flight turns finish and replies from other Hermes surfaces are picked up by polling.
- * Hermes' API server has no push channel for session activity, so polling is the only
- * documented option (see docs/HERMES_API.md).
+ * in-flight turns finish and replies from other Hermes surfaces are picked up by polling the
+ * dashboard's session list. Polling survives sleep and network changes without a socket to
+ * keep alive (see docs/HERMES_API.md).
  */
 class SyncService : Service() {
     private var loop: Job? = null

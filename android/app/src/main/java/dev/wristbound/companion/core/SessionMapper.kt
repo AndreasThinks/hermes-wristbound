@@ -40,13 +40,13 @@ object SessionMapper {
      * the user asked to see tool activity, and then as a one-line summary.
      */
     fun watchMessages(messages: List<HermesMessage>, toolActivity: ToolActivity): List<WatchMessage> = messages
-        .mapNotNull { m ->
+        .mapIndexedNotNull { i, m ->
             when {
                 m.role == "user" && m.text.isNotBlank() ->
                     WatchMessage(m.stableId, Protocol.Role.USER, 0, Text.forWatch(m.text))
                 m.isFinalAssistantText -> WatchMessage(
                     m.stableId, Protocol.Role.ASSISTANT,
-                    if (m.audioRefs.isNotEmpty()) Protocol.MessageFlag.HAS_AUDIO else 0,
+                    if (audioFor(messages, i).isNotEmpty()) Protocol.MessageFlag.HAS_AUDIO else 0,
                     Text.forWatch(m.text),
                 )
                 toolActivity != ToolActivity.HIDDEN && (m.role == "tool" || m.hasToolCalls) ->
@@ -55,6 +55,17 @@ object SessionMapper {
             }
         }
         .takeLast(Protocol.MAX_MESSAGES)
+
+    /**
+     * Audio Hermes made for the reply at [index]: `MEDIA:` paths in the reply itself, else in
+     * the tool results of the same turn (the text-to-speech tool returns one).
+     */
+    fun audioFor(messages: List<HermesMessage>, index: Int): List<String> {
+        val own = messages[index].audioRefs
+        if (own.isNotEmpty()) return own
+        val turnStart = messages.subList(0, index).indexOfLast { it.role == "user" } + 1
+        return messages.subList(turnStart, index).flatMap { it.audioRefs }.distinct()
+    }
 
     /** New final assistant answers in [messages] that have not been notified yet. */
     fun newReplies(messages: List<HermesMessage>, alreadyNotified: Set<String>): List<HermesMessage> =

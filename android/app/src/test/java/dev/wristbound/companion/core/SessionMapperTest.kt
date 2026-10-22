@@ -1,6 +1,6 @@
 package dev.wristbound.companion.core
 
-import dev.wristbound.companion.hermes.HermesClient
+import dev.wristbound.companion.hermes.HermesHttp
 import dev.wristbound.companion.hermes.HermesMessage
 import dev.wristbound.companion.hermes.HermesSession
 import dev.wristbound.companion.pebble.Protocol
@@ -37,7 +37,7 @@ class SessionMapperTest {
         assertEquals(Protocol.SessionFlag.READ_ONLY, shown.getValue("old").flags)
     }
 
-    private fun msg(json: String) = HermesClient.json.decodeFromString(HermesMessage.serializer(), json)
+    private fun msg(json: String) = HermesHttp.json.decodeFromString(HermesMessage.serializer(), json)
 
     @Test
     fun watchMessagesHideToolStepsByDefault() {
@@ -53,6 +53,23 @@ class SessionMapperTest {
         val shown = SessionMapper.watchMessages(raw, ToolActivity.SILENT)
         assertEquals(listOf("1", "2", "3", "4"), shown.map { it.id })
         assertEquals("Used terminal", shown[2].text)
+    }
+
+    @Test
+    fun audioFromTheTextToSpeechToolBelongsToTheReplyOfThatTurn() {
+        val raw = listOf(
+            msg("""{"id":1,"role":"user","content":"Say hi"}"""),
+            msg("""{"id":2,"role":"assistant","content":"","tool_calls":[{"id":"c"}]}"""),
+            msg("""{"id":3,"role":"tool","tool_name":"text_to_speech","content":"{\"success\": true, \"media_tag\": \"[[audio_as_voice]]\\nMEDIA:/home/h/.hermes/cache/audio/tts_1.ogg\"}"}"""),
+            msg("""{"id":4,"role":"assistant","content":"Here you go."}"""),
+            msg("""{"id":5,"role":"user","content":"Thanks"}"""),
+            msg("""{"id":6,"role":"assistant","content":"Any time."}"""),
+        )
+        assertEquals(listOf("/home/h/.hermes/cache/audio/tts_1.ogg"), SessionMapper.audioFor(raw, 3))
+        assertEquals(emptyList<String>(), SessionMapper.audioFor(raw, 5))
+        val shown = SessionMapper.watchMessages(raw, ToolActivity.HIDDEN).associateBy { it.id }
+        assertEquals(Protocol.MessageFlag.HAS_AUDIO, shown.getValue("4").flags)
+        assertEquals(0, shown.getValue("6").flags)
     }
 
     @Test

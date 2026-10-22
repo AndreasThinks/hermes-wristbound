@@ -5,28 +5,44 @@ import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import dev.wristbound.companion.hermes.CredentialStore
+import dev.wristbound.companion.hermes.Credentials
+import dev.wristbound.companion.hermes.HermesHttp
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-/** User settings. The Hermes API key is encrypted with an Android Keystore key and never leaves the phone. */
-class Settings(context: Context) {
+/**
+ * User settings. Hermes credentials (sign-in tokens or a session token) are encrypted with an
+ * Android Keystore key and never leave the phone.
+ */
+class Settings(context: Context) : CredentialStore {
     private val prefs: SharedPreferences = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
     var baseUrl: String
         get() = prefs.getString(KEY_URL, "").orEmpty()
         set(v) = prefs.edit().putString(KEY_URL, v.trim()).apply()
 
-    var apiKey: String
-        get() = prefs.getString(KEY_TOKEN, null)?.let { runCatching { Secrets.decrypt(it) }.getOrNull() }.orEmpty()
-        set(v) {
-            if (v.isBlank()) prefs.edit().remove(KEY_TOKEN).apply()
-            else prefs.edit().putString(KEY_TOKEN, Secrets.encrypt(v.trim())).apply()
-        }
+    @Synchronized
+    override fun load(): Credentials? = prefs.getString(KEY_CREDENTIALS, null)?.let { stored ->
+        runCatching { HermesHttp.json.decodeFromString(Credentials.serializer(), Secrets.decrypt(stored)) }.getOrNull()
+    }
 
-    val isConfigured: Boolean get() = baseUrl.isNotBlank() && apiKey.isNotBlank()
+    @Synchronized
+    override fun save(credentials: Credentials?) {
+        // commit(): a rotated refresh token must be on disk before the old one is forgotten.
+        if (credentials == null) prefs.edit().remove(KEY_CREDENTIALS).commit()
+        else prefs.edit().putString(KEY_CREDENTIALS, Secrets.encrypt(HermesHttp.json.encodeToString(Credentials.serializer(), credentials))).commit()
+    }
+
+    val isConfigured: Boolean get() = baseUrl.isNotBlank() && load() != null
+
+    /** Prefer Hermes' own voice (its `tts:` config) when a reply has no attached audio. */
+    var hermesVoice: Boolean
+        get() = prefs.getBoolean("hermes_voice", true)
+        set(v) = prefs.edit().putBoolean("hermes_voice", v).apply()
 
     var includeTelegram: Boolean
         get() = prefs.getBoolean("include_telegram", true)
@@ -66,7 +82,7 @@ class Settings(context: Context) {
 
     private companion object {
         const val KEY_URL = "hermes_url"
-        const val KEY_TOKEN = "hermes_token"
+        const val KEY_CREDENTIALS = "hermes_credentials"
     }
 }
 

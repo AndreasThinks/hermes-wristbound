@@ -8,17 +8,17 @@ import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.MediaPlayer
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import androidx.core.content.ContextCompat
 import dev.wristbound.companion.pebble.Protocol
+import java.io.File
 
 /**
- * Plays one exact reply, chosen by message id, on the phone's current audio route.
- *
- * Hermes' API server does not expose generated audio files to remote clients (see
- * docs/HERMES_API.md), so replies are spoken with the phone's TextToSpeech engine. Playback
+ * Plays one exact reply, chosen by message id, on the phone's current audio route: either an
+ * audio file from Hermes ([playFile]) or the phone's TextToSpeech engine ([play]). Playback
  * never silently falls back to the loudspeaker: without headphones it reports
  * [Protocol.Playback.NEEDS_SPEAKER] unless the request explicitly allowed the speaker, and a
  * headphone disconnect pauses rather than continuing out loud.
@@ -33,6 +33,8 @@ class PlaybackController(
     private var pendingStart: (() -> Unit)? = null
 
     private var messageId: String? = null
+    private var player: MediaPlayer? = null
+    private var playerLabel = ""
     private var chunks: List<String> = emptyList()
     private var position = 0
     private var playing = false
@@ -54,7 +56,7 @@ class PlaybackController(
 
     val currentMessageId: String? get() = messageId
     val isPlaying: Boolean get() = playing
-    val isPaused: Boolean get() = !playing && messageId != null && position < chunks.size
+    val isPaused: Boolean get() = !playing && messageId != null && (player != null || position < chunks.size)
 
     fun hasPrivateOutput(): Boolean = audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { it.type in PRIVATE_OUTPUTS }
 
@@ -76,11 +78,38 @@ class PlaybackController(
         startWhenReady()
     }
 
+    /** Play the audio file [file] for [id] from the start; [label] is what the watch shows. */
+    @Synchronized
+    fun playFile(id: String, file: File, allowSpeaker: Boolean, label: String) {
+        if (!allowSpeaker && !hasPrivateOutput()) {
+            onState(id, Protocol.Playback.NEEDS_SPEAKER, "No headphones")
+            return
+        }
+        stopInternal(report = false)
+        messageId = id
+        playerLabel = label
+        val mp = MediaPlayer()
+        try {
+            mp.setAudioAttributes(attributes)
+            mp.setDataSource(file.absolutePath)
+            mp.setOnCompletionListener { done(id) }
+            mp.setOnErrorListener { _, _, _ -> failed(id); true }
+            mp.prepare()
+        } catch (e: Exception) {
+            mp.release()
+            messageId = null
+            onState(id, Protocol.Playback.ERROR, "Cannot play this audio")
+            return
+        }
+        player = mp
+        startPlayer()
+    }
+
     @Synchronized
     fun pause(reason: String = "Paused") {
         if (!playing) return
         playing = false
-        tts?.stop()
+        player?.let { runCatching { it.pause() } } ?: tts?.stop()
         releaseFocus()
         onState(messageId, Protocol.Playback.PAUSED, reason)
     }
@@ -88,12 +117,50 @@ class PlaybackController(
     @Synchronized
     fun resume(allowSpeaker: Boolean = false) {
         val id = messageId ?: return
-        if (playing || position >= chunks.size) return
+        if (playing || (player == null && position >= chunks.size)) return
         if (!allowSpeaker && !hasPrivateOutput()) {
             onState(id, Protocol.Playback.NEEDS_SPEAKER, "No headphones")
             return
         }
-        startWhenReady()
+        if (player != null) startPlayer() else startWhenReady()
+    }
+
+    private fun startPlayer() {
+        val mp = player ?: return
+        val id = messageId ?: return
+        if (!requestFocus()) {
+            onState(id, Protocol.Playback.ERROR, "Audio busy")
+            return
+        }
+        registerNoisy()
+        playing = true
+        mp.start()
+        onState(id, Protocol.Playback.PLAYING, playerLabel)
+    }
+
+    @Synchronized
+    private fun done(id: String) {
+        if (id != messageId) return
+        playing = false
+        releasePlayer()
+        releaseFocus()
+        messageId = null
+        onState(id, Protocol.Playback.DONE, "Finished")
+    }
+
+    @Synchronized
+    private fun failed(id: String) {
+        if (id != messageId) return
+        playing = false
+        releasePlayer()
+        releaseFocus()
+        messageId = null
+        onState(id, Protocol.Playback.ERROR, "Playback failed")
+    }
+
+    private fun releasePlayer() {
+        player?.let { runCatching { it.stop() }; it.release() }
+        player = null
     }
 
     @Synchronized
@@ -110,6 +177,7 @@ class PlaybackController(
         val id = messageId
         playing = false
         tts?.stop()
+        releasePlayer()
         releaseFocus()
         messageId = null
         chunks = emptyList()
@@ -155,7 +223,7 @@ class PlaybackController(
         for (i in position until chunks.size) {
             engine.speak(chunks[i], if (i == position) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, params, "$id#$i")
         }
-        onState(id, Protocol.Playback.PLAYING, "Playing on phone")
+        onState(id, Protocol.Playback.PLAYING, "Playing phone voice")
     }
 
     private val progress = object : UtteranceProgressListener() {

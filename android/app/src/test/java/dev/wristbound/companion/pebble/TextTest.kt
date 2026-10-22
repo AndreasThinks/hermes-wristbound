@@ -31,6 +31,6 @@ class TextTest {
     @Test
     fun stripsMarkdownAndMediaTags() {
         val raw = "## Result\n**Done** see [docs](https://x.y)\n\n\n\n![chart](data:image/png;base64,AAA)\nMEDIA:/tmp/a.mp3"
-        assertEquals("Result\nDone see docs\n\n[image]\n[media]", Text.forWatch(raw))
+        assertEquals("Result\nDone see docs\n\n[image]\n[audio]", Text.forWatch(raw))
     }
 }
