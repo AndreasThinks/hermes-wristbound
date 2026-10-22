@@ -36,6 +36,7 @@ The screenshots in the README and `docs/screenshots/` come from this harness on 
 
 | File | Buttons from the main menu |
 |------|-------------------------------|
+| `splash.png`, `chalk-splash.png` | none: shot just after launch, with `SPLASH_MS` in `watch/src/c/splash.c` raised for the shot so the launch screen stays up |
 | `sessions.png` | (after Refresh: the main menu) |
 | `recent-audio.png` | Select (on Recent audio) |
 | `audio-reply.png` | Select, Select (the preview is replaced by the full reply the fake phone sends) |
@@ -43,12 +44,12 @@ The screenshots in the README and `docs/screenshots/` come from this harness on 
 | `reply.png` | as `session.png`, then Select |
 | `actions.png` | as `reply.png`, then Select |
 | `compose.png` | Select, Select, Select, Back, Back, Up (to Reply), Select |
-| `working.png`, `received.png` | from compose: Down, Select; shot after 0.5 s and after 4 s |
+| `working.png`, `received.png` | from compose: Down, Select; shot at once and after 4 s |
 | `chalk-sessions.png`, `chalk-session.png`, `chalk-reply.png` | as above, on `--emulator chalk` |
 
 On a headless Linux machine, start a virtual display first (`Xvfb :99 &` and `export DISPLAY=:99`), since QEMU opens an SDL window. In containers without IPv6, pypkjs fails to listen (`Address family not supported`) and `pebble install` reports `Connection refused`; binding its WebSocket server to `0.0.0.0` instead of `""` in `pypkjs/runner/websocket.py` works around it.
 
-The Recent audio list and its reply card were checked on basalt and chalk this way. Checked on basalt and aplite this way: session list with unread, Telegram and read-only labels; the Telegram toggle; opening a session (newest first); reading a reply; the action menu; Play without headphones reporting "No headphones"; Play on phone speaker; a quick reply moving through working to completed. On chalk (round), the session list, session view and reply view were checked for text cut off at the screen edge.
+The Phosphor look (menus, headers, reply cards, waveform, launch screen) was checked on basalt, chalk and aplite this way; on aplite the main menu, Recent audio, a reply card and its action menu were opened with the heap watched, since the restyle's code shares aplite's 24 KB with the heap. The vibration patterns and the alert intro's timing need a real watch to judge. The Recent audio list and its reply card were checked on basalt and chalk this way. Checked on basalt and aplite this way: session list with unread, Telegram and read-only labels; the Telegram toggle; opening a session (newest first); reading a reply; the action menu; Play without headphones reporting "No headphones"; Play on phone speaker; a quick reply moving through working to completed. On chalk (round), the session list, session view and reply view were checked for text cut off at the screen edge.
 
 The watch speaker was checked on emery the same way (`python3 tools/fake_phone.py emery`; the fake phone streams a 4 s tone for every Recent audio item except the "Repo cleanup" one, which has no audio): Play on watch speaker goes from "Buffering n%" to "Watch: Hermes audio"; Pause, Resume and Stop on watch; the reply without audio fails with "No Hermes audio for this reply"; nothing is left allocated when the app exits. The emulator has no audio output, and its speaker never takes samples, so there playback ends with "Watch speaker is not playing" after 5 s. Sound, and whether Bluetooth keeps up with 8 KB/s, can only be checked on a watch. The fake phone sends 1000-byte chunks because the emulator's serial link garbles bigger packets; the real phone sends chunks as large as the watch's inbox allows.
 

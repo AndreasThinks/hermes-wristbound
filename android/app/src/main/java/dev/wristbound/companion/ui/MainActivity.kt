@@ -3,15 +3,21 @@ package dev.wristbound.companion.ui
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings as AndroidSettings
 import android.text.Editable
 import android.text.InputType
+import android.text.SpannableString
+import android.text.Spanned
 import android.text.TextWatcher
+import android.text.style.ForegroundColorSpan
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
@@ -19,6 +25,7 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
@@ -82,8 +89,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // The toolbar is drawn under the status bar in Wristbound blue, so its icons stay light.
-        enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT))
+        // The whole screen is black glass, so the system bars keep light icons in any theme.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+        )
         super.onCreate(savedInstanceState)
         val s = controller.settings
         val column = LinearLayout(this).apply {
@@ -91,6 +101,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(pad, 0, pad, pad)
         }
 
+        column.addView(masthead())
         column.addView(heading("Hermes"))
         signedInGroup = accountCard()
         column.addView(signedInGroup)
@@ -108,7 +119,7 @@ class MainActivity : AppCompatActivity() {
         column.addView(switch("Show tool activity on watch", s.toolActivity != ToolActivity.HIDDEN) {
             s.toolActivity = if (it) ToolActivity.SILENT else ToolActivity.HIDDEN
         })
-        column.addView(button("Open Wristbound on watch") { lifecycleScope.launch { controller.openWatchApp() } })
+        column.addView(button("Open Wristbound on watch", primary = false) { lifecycleScope.launch { controller.openWatchApp() } })
 
         column.addView(heading("Playback"))
         column.addView(switch("Use Hermes' voice", s.hermesVoice) { s.hermesVoice = it })
@@ -149,7 +160,7 @@ class MainActivity : AppCompatActivity() {
         })
 
         column.addView(heading("Privacy"))
-        column.addView(button("Clear cached conversations") {
+        column.addView(button("Clear cached conversations", primary = false) {
             controller.state.clearCache()
             status.text = "Cache cleared."
         })
@@ -180,8 +191,12 @@ class MainActivity : AppCompatActivity() {
      */
     private fun screen(content: View): View {
         val toolbar = Toolbar(ContextThemeWrapper(this, androidx.appcompat.R.style.ThemeOverlay_AppCompat_Dark_ActionBar)).apply {
-            title = getString(R.string.app_name)
-            setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.wristbound_blue))
+            // "wristbound" and a green block cursor, as the watch shows Hermes working.
+            title = SpannableString("wristbound \u2588").apply {
+                setSpan(ForegroundColorSpan(color(R.color.phosphor_signal)), length - 1, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            setTitleTextAppearance(this@MainActivity, R.style.TextAppearance_Wristbound_Title)
+            setBackgroundColor(color(R.color.phosphor_glass))
         }
         val scroll = ScrollView(this).apply {
             id = R.id.setup_scroll
@@ -209,17 +224,20 @@ class MainActivity : AppCompatActivity() {
         orientation = LinearLayout.VERTICAL
         setPadding(pad, pad / 2, pad, pad / 2)
         background = GradientDrawable().apply {
-            cornerRadius = pad / 2f
-            setStroke((resources.displayMetrics.density * 1.5f).toInt(), ContextCompat.getColor(this@MainActivity, R.color.card_stroke))
+            setStroke(dp(1), color(R.color.phosphor_signal))
         }
-        accountHeading = TextView(this@MainActivity).apply { textSize = 17f }
+        accountHeading = TextView(this@MainActivity).apply {
+            textSize = 17f
+            typeface = Typeface.MONOSPACE
+            setTextColor(color(R.color.phosphor_signal))
+        }
         accountDetail = note("")
         accountConnection = note("")
         addView(accountHeading)
         addView(accountDetail)
         addView(accountConnection)
         addView(button("Test connection") { checkConnection(quiet = false) })
-        addView(button("Sign out") { confirmSignOut() })
+        addView(button("Sign out", primary = false) { confirmSignOut() })
     }
 
     private fun signInForm(): LinearLayout = LinearLayout(this).apply {
@@ -260,7 +278,7 @@ class MainActivity : AppCompatActivity() {
             pass.text.clear()
             signInWithPassword(user.text.toString(), p)
         })
-        addView(button("Sign in with browser") { signInWithBrowser() })
+        addView(button("Sign in with browser", primary = false) { signInWithBrowser() })
 
         addView(subheading("Advanced: session token"))
         addView(note("Only for a dashboard on a loopback bind with no sign-in page: paste the token the desktop app sets as HERMES_DASHBOARD_SESSION_TOKEN."))
@@ -271,7 +289,7 @@ class MainActivity : AppCompatActivity() {
             isSaveEnabled = false
         }
         addView(token)
-        addView(button("Use session token") {
+        addView(button("Use session token", primary = false) {
             val t = token.text.toString()
             token.text.clear()
             useSessionToken(t)
@@ -291,7 +309,8 @@ class MainActivity : AppCompatActivity() {
         accountDetail.text = view.detail
         accountConnection.text = "Hermes: ${view.connection}"
         if (!view.signedIn && s.signInExpired && status.text.isBlank()) status.text = view.connection
-        watchStatus.text = if (controller.watchOpen) "Watchapp: open" else "Watchapp: closed"
+        watchStatus.text = if (controller.watchOpen) "\u25CF watchapp open" else "\u25CB watchapp closed"
+        watchStatus.setTextColor(color(if (controller.watchOpen) R.color.phosphor_signal else R.color.phosphor_meta))
         monitoring.text = controller.monitoringSummary()
         val canNotify = Notifier(this).canPost()
         notificationStatus.text = if (canNotify) "Notifications: allowed"
@@ -464,25 +483,73 @@ class MainActivity : AppCompatActivity() {
 
     // -- widgets --------------------------------------------------------------------------------
 
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+
+    private fun color(id: Int) = ContextCompat.getColor(this, id)
+
+    /** The Hermes girl beside the name, as on the watch's launch screen. */
+    private fun masthead(): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = android.view.Gravity.CENTER_VERTICAL
+        setPadding(0, pad, 0, 0)
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(R.drawable.hermes_girl)
+            contentDescription = "Hermes"
+            adjustViewBounds = true
+        }, LinearLayout.LayoutParams(dp(72), dp(84)))
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, 0, 0, 0)
+            addView(TextView(this@MainActivity).apply {
+                text = "Hermes on your wrist"
+                textSize = 17f
+                typeface = Typeface.MONOSPACE
+                setTextColor(color(R.color.phosphor_text))
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "Replies, audio and quick answers, relayed to your Pebble."
+                textSize = 13f
+                setTextColor(color(R.color.phosphor_note))
+            })
+        })
+    }
+
+    /** "// SECTION": the watch's section headers, in the same grey. */
     private fun heading(text: String) = TextView(this).apply {
-        this.text = text
-        textSize = 18f
-        setPadding(0, (20 * resources.displayMetrics.density).toInt(), 0, 4)
+        this.text = "// ${text.uppercase()}"
+        textSize = 13f
+        typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+        letterSpacing = 0.06f
+        setTextColor(color(R.color.phosphor_meta))
+        setPadding(0, dp(24), 0, dp(6))
     }
 
     private fun subheading(text: String) = TextView(this).apply {
         this.text = text
         textSize = 15f
-        setPadding(0, (12 * resources.displayMetrics.density).toInt(), 0, 2)
+        typeface = Typeface.MONOSPACE
+        setTextColor(color(R.color.phosphor_text))
+        setPadding(0, dp(12), 0, 2)
     }
 
     private fun note(text: String) = TextView(this).apply {
         this.text = text
         textSize = 13f
+        setTextColor(color(R.color.phosphor_note))
     }
 
-    private fun button(label: String, onClick: () -> Unit) = Button(this).apply {
+    /** Green and filled for the main action, outlined for the rest; square, like the watch. */
+    private fun button(label: String, primary: Boolean = true, onClick: () -> Unit) = Button(this).apply {
         text = label
+        typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+        stateListAnimator = null
+        val face = GradientDrawable().apply {
+            if (primary) setColor(color(R.color.phosphor_signal))
+            else setStroke(dp(1), color(R.color.phosphor_meta))
+        }
+        background = RippleDrawable(ColorStateList.valueOf(color(R.color.phosphor_voice)), face, null)
+        setTextColor(color(if (primary) R.color.phosphor_glass else R.color.phosphor_text))
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(8) }
         setOnClickListener { onClick() }
     }
 

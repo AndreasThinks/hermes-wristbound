@@ -2,9 +2,26 @@
 #include "comm.h"
 #include "model.h"
 #include "speaker.h"
+#include "splash.h"
+#include "theme.h"
 
 #define DICTATION_LEN 256
 #define STATUS_H 22
+// The round screen's top edge would clip the title; drop it to where the circle is wide enough.
+#define STATUS_Y PBL_IF_ROUND_ELSE(12, 0)
+#define WAVE_H 18
+#define WAVE_INSET PBL_IF_ROUND_ELSE(24, 6)
+#define WAVE_FRAME_MS 150
+#define INTRO_FRAME_MS 33
+#define INTRO_RISE_MS 200
+#define INTRO_TYPE_MS 400
+// Aplite's 24 KB holds code and heap together: the waveform and the intro are not worth their
+// share there.
+#if defined(PBL_PLATFORM_APLITE)
+#define MOTION_ENABLED false
+#else
+#define MOTION_ENABLED true
+#endif
 // Round screens inset text by flowing it; a fixed inset would add to that.
 #define TEXT_INSET PBL_IF_ROUND_ELSE(0, 4)
 
@@ -71,25 +88,6 @@ static const char *prv_role_label(uint8_t role) {
   }
 }
 
-// The stock header is left-aligned, which the round screen's edge cuts off; centre it there.
-static void prv_header_draw(GContext *ctx, const Layer *cell, const char *text) {
-#if defined(PBL_ROUND)
-  GRect bounds = layer_get_bounds(cell);
-  graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-                     GRect(0, -1, bounds.size.w, bounds.size.h), GTextOverflowModeTrailingEllipsis,
-                     GTextAlignmentCenter, NULL);
-#else
-  menu_cell_basic_header_draw(ctx, cell, text);
-#endif
-}
-
-static void prv_menu_colors(MenuLayer *menu) {
-#if defined(PBL_COLOR)
-  menu_layer_set_highlight_colors(menu, GColorCobaltBlue, GColorWhite);
-#endif
-}
-
 // ---------------------------------------------------------------------------
 // Compose window (dictation + canned replies)
 
@@ -133,10 +131,10 @@ static uint16_t prv_compose_rows(MenuLayer *menu, uint16_t section, void *ctx) {
 
 static void prv_compose_draw(GContext *ctx, const Layer *cell, MenuIndex *idx, void *data) {
   if (idx->row == 0) {
-    menu_cell_basic_draw(ctx, cell, "Dictate",
-                         prv_has_dictation() ? "Speak your message" : "No microphone", NULL);
+    theme_draw_row(ctx, cell, "Dictate",
+                   prv_has_dictation() ? "Speak your message" : "No microphone", 0);
   } else {
-    menu_cell_basic_draw(ctx, cell, CANNED[idx->row - 1], NULL, NULL);
+    theme_draw_row(ctx, cell, CANNED[idx->row - 1], NULL, 0);
   }
 }
 
@@ -145,7 +143,7 @@ static void prv_compose_select(MenuLayer *menu, MenuIndex *idx, void *ctx) {
     if (prv_has_dictation()) {
       dictation_session_start(s_dictation);
     } else {
-      vibes_short_pulse();
+      theme_vibe_nudge();
     }
   } else {
     prv_submit_text(CANNED[idx->row - 1]);
@@ -160,7 +158,7 @@ static void prv_compose_load(Window *window) {
     .draw_row = prv_compose_draw,
     .select_click = prv_compose_select,
   });
-  prv_menu_colors(s_compose_menu);
+  theme_menu(s_compose_menu);
   menu_layer_set_click_config_onto_window(s_compose_menu, window);
   layer_add_child(root, menu_layer_get_layer(s_compose_menu));
 }
@@ -215,7 +213,43 @@ static char *s_msg_body;
 static uint8_t s_msg_role;
 static uint8_t s_msg_flags;
 
+// A reply with audio shows its waveform under the title bar: violet while there is something to
+// play, moving while it plays, grey while paused.
+static Layer *s_msg_wave;
+static AppTimer *s_wave_timer;
+static int s_wave_phase;
+static int s_wave_rise = 100;
+
+// An incoming reply arrives like a radio tuning in: the waveform rises, then the text types
+// itself out. Any button skips to the end.
+static bool s_msg_intro;
+static AppTimer *s_intro_timer;
+static char *s_msg_shown;
+static size_t s_msg_shown_len;
+
 static void prv_open_session_window(void);
+
+static bool prv_msg_playing(void) {
+  return strcmp(g_model.playback_message_id, s_msg_id) == 0 && g_model.playback == PLAYBACK_PLAYING;
+}
+
+static void prv_wave_tick(void *ctx) {
+  s_wave_timer = NULL;
+  if (!s_msg_wave || !prv_msg_playing()) {
+    return;
+  }
+  s_wave_phase++;
+  layer_mark_dirty(s_msg_wave);
+  s_wave_timer = app_timer_register(WAVE_FRAME_MS, prv_wave_tick, NULL);
+}
+
+static void prv_wave_draw(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
+  bool paused = strcmp(g_model.playback_message_id, s_msg_id) == 0 &&
+                g_model.playback == PLAYBACK_PAUSED;
+  theme_draw_wave(ctx, b, theme_seed(s_msg_id), paused ? THEME_DIM : THEME_VOICE, s_wave_rise,
+                  s_wave_phase);
+}
 
 static void prv_msg_update_status(void) {
   if (!s_msg_status) {
@@ -223,6 +257,89 @@ static void prv_msg_update_status(void) {
   }
   const char *pb = prv_playback_label(s_msg_id);
   text_layer_set_text(s_msg_status, pb ? pb : s_msg_header);
+  text_layer_set_text_color(s_msg_status, pb ? THEME_VOICE : THEME_SIGNAL);
+  if (MOTION_ENABLED && s_msg_wave) {
+    layer_mark_dirty(s_msg_wave);
+    if (prv_msg_playing() && !s_wave_timer) {
+      s_wave_timer = app_timer_register(WAVE_FRAME_MS, prv_wave_tick, NULL);
+    }
+  }
+}
+
+static void prv_intro_stop(void) {
+  if (s_intro_timer) {
+    app_timer_cancel(s_intro_timer);
+    s_intro_timer = NULL;
+  }
+  s_msg_intro = false;
+  s_wave_rise = 100;
+  free(s_msg_shown);
+  s_msg_shown = NULL;
+}
+
+// Skip the intro: everything at once.
+static void prv_intro_finish(void) {
+  if (!MOTION_ENABLED || !s_msg_intro) {
+    return;
+  }
+  prv_intro_stop();
+  if (s_msg_wave) {
+    layer_mark_dirty(s_msg_wave);
+  }
+  if (s_msg_text) {
+    text_layer_set_text(s_msg_text, s_msg_body ? s_msg_body : "");
+  }
+}
+
+static void prv_intro_tick(void *ctx) {
+  s_intro_timer = NULL;
+  if (s_wave_rise < 100) {
+    s_wave_rise += 100 * INTRO_FRAME_MS / INTRO_RISE_MS;
+    if (s_wave_rise > 100) {
+      s_wave_rise = 100;
+    }
+    layer_mark_dirty(s_msg_wave);
+    s_intro_timer = app_timer_register(INTRO_FRAME_MS, prv_intro_tick, NULL);
+    return;
+  }
+  size_t len = s_msg_body ? strlen(s_msg_body) : 0;
+  if (!s_msg_shown || s_msg_shown_len >= len) {
+    prv_intro_finish();
+    return;
+  }
+  // However long the reply, it finishes typing in about INTRO_TYPE_MS.
+  size_t step = len / (INTRO_TYPE_MS / INTRO_FRAME_MS) + 2;
+  size_t n = s_msg_shown_len + step;
+  if (n >= len) {
+    prv_intro_finish();
+    return;
+  }
+  while (n < len && ((uint8_t)s_msg_body[n] & 0xC0) == 0x80) {
+    n++; // never split a UTF-8 character
+  }
+  memcpy(s_msg_shown, s_msg_body, n);
+  s_msg_shown[n] = '\0';
+  s_msg_shown_len = n;
+  text_layer_set_text(s_msg_text, s_msg_shown);
+  s_intro_timer = app_timer_register(INTRO_FRAME_MS, prv_intro_tick, NULL);
+}
+
+static void prv_intro_start(void) {
+  size_t len = s_msg_body ? strlen(s_msg_body) : 0;
+  s_msg_shown = malloc(len + 1);
+  if (!s_msg_shown) {
+    prv_intro_finish(); // no memory to spare for the effect: just show it
+    return;
+  }
+  s_msg_shown[0] = '\0';
+  s_msg_shown_len = 0;
+  s_wave_rise = s_msg_wave ? 0 : 100;
+  text_layer_set_text(s_msg_text, s_msg_shown);
+  s_intro_timer = app_timer_register(INTRO_FRAME_MS, prv_intro_tick, NULL);
+}
+
+static void prv_msg_scrolled(ScrollLayer *scroll, void *ctx) {
+  prv_intro_finish();
 }
 
 static void prv_msg_layout(void) {
@@ -273,6 +390,7 @@ static void prv_action_menu_closed(ActionMenu *menu, const ActionMenuItem *item,
 }
 
 static void prv_msg_select(ClickRecognizerRef rec, void *ctx) {
+  prv_intro_finish();
   if (s_msg_role != ROLE_ASSISTANT && s_msg_mode != MSG_MODE_REPLY) {
     return; // only assistant replies are playable
   }
@@ -323,8 +441,8 @@ static void prv_msg_select(ClickRecognizerRef rec, void *ctx) {
   ActionMenuConfig config = {
     .root_level = root,
     .colors = {
-      .background = PBL_IF_COLOR_ELSE(GColorCobaltBlue, GColorBlack),
-      .foreground = GColorWhite,
+      .background = PBL_IF_COLOR_ELSE(THEME_VOICE, GColorBlack),
+      .foreground = PBL_IF_COLOR_ELSE(GColorBlack, GColorWhite),
     },
     .align = ActionMenuAlignCenter,
     .did_close = prv_action_menu_closed,
@@ -339,18 +457,28 @@ static void prv_msg_click_config(void *ctx) {
 static void prv_msg_load(Window *window) {
   Layer *root = window_get_root_layer(window);
   GRect bounds = layer_get_bounds(root);
+  theme_window(window);
 
-  s_msg_status = text_layer_create(GRect(0, 0, bounds.size.w, STATUS_H));
+  s_msg_status = text_layer_create(GRect(0, STATUS_Y, bounds.size.w, STATUS_H));
   text_layer_set_font(s_msg_status, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   text_layer_set_text_alignment(s_msg_status, GTextAlignmentCenter);
-  text_layer_set_background_color(s_msg_status, PBL_IF_COLOR_ELSE(GColorCobaltBlue, GColorBlack));
-  text_layer_set_text_color(s_msg_status, GColorWhite);
+  text_layer_set_background_color(s_msg_status, THEME_BG);
+  text_layer_set_text_color(s_msg_status, THEME_SIGNAL);
   layer_add_child(root, text_layer_get_layer(s_msg_status));
 
-  GRect scroll_frame = GRect(0, STATUS_H, bounds.size.w, bounds.size.h - STATUS_H);
+  int top = STATUS_Y + STATUS_H + 1;
+  if (MOTION_ENABLED && (s_msg_flags & MESSAGE_FLAG_HAS_AUDIO)) {
+    s_msg_wave = layer_create(GRect(WAVE_INSET, top + 2, bounds.size.w - 2 * WAVE_INSET, WAVE_H));
+    layer_set_update_proc(s_msg_wave, prv_wave_draw);
+    layer_add_child(root, s_msg_wave);
+    top += WAVE_H + 4;
+  }
+
+  GRect scroll_frame = GRect(0, top, bounds.size.w, bounds.size.h - top);
   s_msg_scroll = scroll_layer_create(scroll_frame);
   scroll_layer_set_callbacks(s_msg_scroll, (ScrollLayerCallbacks) {
     .click_config_provider = prv_msg_click_config,
+    .content_offset_changed_handler = prv_msg_scrolled,
   });
   scroll_layer_set_click_config_onto_window(s_msg_scroll, window);
 #if defined(PBL_ROUND)
@@ -359,6 +487,8 @@ static void prv_msg_load(Window *window) {
 
   s_msg_text = text_layer_create(GRect(TEXT_INSET, 0, bounds.size.w - 2 * TEXT_INSET, 4000));
   text_layer_set_font(s_msg_text, fonts_get_system_font(FONT_KEY_GOTHIC_24));
+  text_layer_set_background_color(s_msg_text, GColorClear);
+  text_layer_set_text_color(s_msg_text, THEME_FG);
   text_layer_set_text(s_msg_text, s_msg_body ? s_msg_body : "");
   text_layer_set_overflow_mode(s_msg_text, GTextOverflowModeWordWrap);
   scroll_layer_add_child(s_msg_scroll, text_layer_get_layer(s_msg_text));
@@ -370,9 +500,21 @@ static void prv_msg_load(Window *window) {
 
   prv_msg_layout();
   prv_msg_update_status();
+  if (MOTION_ENABLED && s_msg_intro) {
+    prv_intro_start();
+  }
 }
 
 static void prv_msg_unload(Window *window) {
+  prv_intro_stop();
+  if (s_wave_timer) {
+    app_timer_cancel(s_wave_timer);
+    s_wave_timer = NULL;
+  }
+  if (s_msg_wave) {
+    layer_destroy(s_msg_wave);
+    s_msg_wave = NULL;
+  }
   text_layer_destroy(s_msg_text);
   scroll_layer_destroy(s_msg_scroll);
   text_layer_destroy(s_msg_status);
@@ -385,6 +527,7 @@ static void prv_msg_unload(Window *window) {
 
 // Replace the card's text; updates the window in place when it is showing.
 static void prv_msg_set_body(const char *text, uint8_t flags) {
+  prv_intro_finish();
   const char *more = (flags & MESSAGE_FLAG_TRUNCATED) ? "\n\n[Continues on phone]" : "";
   size_t len = strlen(text) + strlen(more) + 1;
   free(s_msg_body);
@@ -399,7 +542,8 @@ static void prv_msg_set_body(const char *text, uint8_t flags) {
 }
 
 static void prv_open_message(MessageMode mode, const char *session_id, const char *message_id,
-                             const char *header, uint8_t role, uint8_t flags, const char *text) {
+                             const char *header, uint8_t role, uint8_t flags, const char *text,
+                             bool intro) {
   if (s_msg_window && window_stack_contains_window(s_msg_window)) {
     window_stack_remove(s_msg_window, false);
   }
@@ -413,6 +557,7 @@ static void prv_open_message(MessageMode mode, const char *session_id, const cha
   strncpy(s_msg_header, header, TITLE_LEN - 1);
   s_msg_header[TITLE_LEN - 1] = '\0';
   prv_msg_set_body(text, flags);
+  s_msg_intro = intro && MOTION_ENABLED;
 
   if (!s_msg_window) {
     s_msg_window = window_create();
@@ -445,7 +590,7 @@ static int16_t prv_session_header_h(MenuLayer *menu, uint16_t section, void *ctx
 
 static void prv_session_header(GContext *ctx, const Layer *cell, uint16_t section, void *data) {
   const char *title = g_model.open_session_title[0] ? g_model.open_session_title : "Session";
-  prv_header_draw(ctx, cell, title);
+  theme_draw_header(ctx, cell, title, THEME_SIGNAL);
 }
 
 static void prv_session_draw(GContext *ctx, const Layer *cell, MenuIndex *idx, void *data) {
@@ -454,18 +599,23 @@ static void prv_session_draw(GContext *ctx, const Layer *cell, MenuIndex *idx, v
     if (!sub && (g_model.open_session_flags & SESSION_FLAG_READ_ONLY)) {
       sub = "Read-only here";
     }
-    menu_cell_basic_draw(ctx, cell, "Reply", sub ? sub : "Dictate or quick reply", NULL);
+    bool working = g_model.submit == SUBMIT_QUEUED || g_model.submit == SUBMIT_WORKING;
+    theme_draw_row(ctx, cell, "Reply", sub ? sub : "Dictate or quick reply",
+                   working ? THEME_MARK_WORKING : 0);
     return;
   }
   if (g_model.message_count == 0) {
-    menu_cell_basic_draw(ctx, cell, g_model.messages_loading ? "Loading..." : "No messages",
-                         NULL, NULL);
+    theme_draw_row(ctx, cell, g_model.messages_loading ? "Loading..." : "No messages", NULL, 0);
     return;
   }
   int i = prv_message_for_row(idx->row);
   const Message *m = &g_model.messages[i];
   const char *pb = prv_playback_label(m->id);
-  menu_cell_basic_draw(ctx, cell, pb ? pb : prv_role_label(m->role), m->text ? m->text : "", NULL);
+  uint8_t marks = (m->flags & MESSAGE_FLAG_HAS_AUDIO) ? THEME_MARK_WAVE : 0;
+  if (m->flags & MESSAGE_FLAG_PENDING) {
+    marks |= THEME_MARK_WORKING;
+  }
+  theme_draw_row(ctx, cell, pb ? pb : prv_role_label(m->role), m->text ? m->text : "", marks);
 }
 
 static void prv_session_select(MenuLayer *menu, MenuIndex *idx, void *ctx) {
@@ -473,7 +623,7 @@ static void prv_session_select(MenuLayer *menu, MenuIndex *idx, void *ctx) {
     // Read-only sessions (refused by Hermes, or Telegram with replies turned off on the phone)
     // stay readable and playable; the phone also refuses the send.
     if (g_model.open_session_flags & SESSION_FLAG_READ_ONLY) {
-      vibes_short_pulse();
+      theme_vibe_nudge();
       return;
     }
     prv_open_compose(COMPOSE_REPLY);
@@ -485,7 +635,7 @@ static void prv_session_select(MenuLayer *menu, MenuIndex *idx, void *ctx) {
   }
   const Message *m = &g_model.messages[prv_message_for_row(idx->row)];
   prv_open_message(MSG_MODE_MESSAGE, g_model.open_session_id, m->id, prv_role_label(m->role),
-                   m->role, m->flags, m->text ? m->text : "");
+                   m->role, m->flags, m->text ? m->text : "", false);
 }
 
 static void prv_session_long_select(MenuLayer *menu, MenuIndex *idx, void *ctx) {
@@ -506,7 +656,7 @@ static void prv_session_load(Window *window) {
     .select_click = prv_session_select,
     .select_long_click = prv_session_long_select,
   });
-  prv_menu_colors(s_session_menu);
+  theme_menu(s_session_menu);
   menu_layer_set_click_config_onto_window(s_session_menu, window);
   layer_add_child(root, menu_layer_get_layer(s_session_menu));
 }
@@ -573,21 +723,26 @@ static int16_t prv_audio_header_h(MenuLayer *menu, uint16_t section, void *ctx) 
 }
 
 static void prv_audio_header(GContext *ctx, const Layer *cell, uint16_t section, void *data) {
-  prv_header_draw(ctx, cell, g_model.conn == CONN_OK ? "Recent audio" : prv_conn_label());
+  if (g_model.conn == CONN_OK) {
+    theme_draw_header(ctx, cell, "> Recent audio", THEME_VOICE);
+  } else {
+    theme_draw_header(ctx, cell, prv_conn_label(), THEME_FG);
+  }
 }
 
 static void prv_audio_draw(GContext *ctx, const Layer *cell, MenuIndex *idx, void *data) {
   if (g_model.audio_count == 0) {
-    menu_cell_basic_draw(ctx, cell, g_model.audio_loading ? "Loading..." : "No recent audio",
-                         "Long press to refresh", NULL);
+    theme_draw_row(ctx, cell, g_model.audio_loading ? "Loading..." : "No recent audio",
+                   "Long press to refresh", 0);
     return;
   }
   const AudioItem *a = &g_model.audio[idx->row];
   char age[8];
   prv_age(a->time, age, sizeof(age));
   char sub[PREVIEW_LEN + 16];
-  snprintf(sub, sizeof(sub), "%s%s %s", (a->flags & AUDIO_FLAG_NEW) ? "* " : "", age, a->preview);
-  menu_cell_basic_draw(ctx, cell, a->title[0] ? a->title : "Untitled", sub, NULL);
+  snprintf(sub, sizeof(sub), "%s %s", age, a->preview);
+  theme_draw_row(ctx, cell, a->title[0] ? a->title : "Untitled", sub,
+                 THEME_MARK_WAVE | ((a->flags & AUDIO_FLAG_NEW) ? THEME_MARK_NEW : 0));
 }
 
 static void prv_audio_select(MenuLayer *menu, MenuIndex *idx, void *ctx) {
@@ -600,7 +755,7 @@ static void prv_audio_select(MenuLayer *menu, MenuIndex *idx, void *ctx) {
   a->flags &= ~AUDIO_FLAG_NEW;
   // Show the preview at once; the phone answers with the full reply, which replaces it.
   prv_open_message(MSG_MODE_REPLY, a->session_id, a->message_id, a->title[0] ? a->title : "Hermes",
-                   ROLE_ASSISTANT, MESSAGE_FLAG_HAS_AUDIO, a->preview);
+                   ROLE_ASSISTANT, MESSAGE_FLAG_HAS_AUDIO, a->preview, false);
   comm_open_reply(a->session_id, a->message_id);
 }
 
@@ -620,7 +775,7 @@ static void prv_audio_load(Window *window) {
     .select_click = prv_audio_select,
     .select_long_click = prv_audio_long_select,
   });
-  prv_menu_colors(s_audio_menu);
+  theme_menu(s_audio_menu);
   menu_layer_set_click_config_onto_window(s_audio_menu, window);
   layer_add_child(root, menu_layer_get_layer(s_audio_menu));
 }
@@ -670,18 +825,34 @@ static int16_t prv_main_header_h(MenuLayer *menu, uint16_t section, void *ctx) {
 
 static void prv_main_header(GContext *ctx, const Layer *cell, uint16_t section, void *data) {
   switch (section) {
-    case MAIN_SECTION_TOP: prv_header_draw(ctx, cell, prv_conn_label()); break;
-    case MAIN_SECTION_SESSIONS: prv_header_draw(ctx, cell, "Sessions"); break;
-    default: prv_header_draw(ctx, cell, "Options"); break;
+    case MAIN_SECTION_TOP: {
+      // "> Connected" in green; anything else is something to look at.
+      char label[DETAIL_LEN + 4];
+      bool ok = g_model.conn == CONN_OK;
+      snprintf(label, sizeof(label), "%s %s", ok ? ">" : "!", prv_conn_label());
+      theme_draw_header(ctx, cell, label, ok ? THEME_SIGNAL : THEME_FG);
+      break;
+    }
+    case MAIN_SECTION_SESSIONS: theme_draw_header(ctx, cell, "// Sessions", THEME_META); break;
+    default: theme_draw_header(ctx, cell, "// Options", THEME_META); break;
   }
 }
 
+// "new working telegram read-only": the marks carry the colour, the words stay plain.
 static void prv_session_subtitle(const Session *s, char *buf, size_t len) {
-  snprintf(buf, len, "%s%s%s%s",
-           (s->flags & SESSION_FLAG_UNREAD) ? "* New " : "",
-           (s->flags & SESSION_FLAG_ACTIVE) ? "Working " : "",
-           (s->flags & SESSION_FLAG_TELEGRAM) ? "Telegram " : "",
-           (s->flags & SESSION_FLAG_READ_ONLY) ? "Read-only" : "");
+  const char *parts[] = {
+    (s->flags & SESSION_FLAG_UNREAD) ? "new" : NULL,
+    (s->flags & SESSION_FLAG_TELEGRAM) ? "telegram" : NULL,
+    (s->flags & SESSION_FLAG_READ_ONLY) ? "read-only" : NULL,
+    (s->flags & SESSION_FLAG_ACTIVE) ? "working" : NULL,
+  };
+  buf[0] = '\0';
+  for (size_t i = 0; i < ARRAY_LENGTH(parts); i++) {
+    if (parts[i]) {
+      size_t used = strlen(buf);
+      snprintf(buf + used, len - used, "%s%s", used ? " " : "", parts[i]);
+    }
+  }
 }
 
 static void prv_audio_summary(char *buf, size_t len) {
@@ -692,7 +863,7 @@ static void prv_audio_summary(char *buf, size_t len) {
     }
   }
   if (fresh > 0) {
-    snprintf(buf, len, "* %d new", fresh);
+    snprintf(buf, len, "%d new", fresh);
   } else if (g_model.audio_count > 0) {
     snprintf(buf, len, "Latest: %s", g_model.audio[0].title);
   } else {
@@ -705,31 +876,36 @@ static void prv_main_draw(GContext *ctx, const Layer *cell, MenuIndex *idx, void
     if (idx->row == MAIN_TOP_AUDIO) {
       char sub[TITLE_LEN + 12];
       prv_audio_summary(sub, sizeof(sub));
-      menu_cell_basic_draw(ctx, cell, "Recent audio", sub, NULL);
+      bool fresh = false;
+      for (int i = 0; i < g_model.audio_count; i++) {
+        fresh |= (g_model.audio[i].flags & AUDIO_FLAG_NEW) != 0;
+      }
+      theme_draw_row(ctx, cell, "Recent audio", sub, THEME_MARK_WAVE | (fresh ? THEME_MARK_NEW : 0));
     } else {
-      menu_cell_basic_draw(ctx, cell, "New session", "Dictate or quick reply", NULL);
+      theme_draw_row(ctx, cell, "New session", "Dictate or quick reply", 0);
     }
     return;
   }
   if (idx->section == MAIN_SECTION_SESSIONS) {
     if (g_model.session_count == 0) {
-      menu_cell_basic_draw(ctx, cell, g_model.sessions_loading ? "Loading..." : "No sessions",
-                           "Long press to refresh", NULL);
+      theme_draw_row(ctx, cell, g_model.sessions_loading ? "Loading..." : "No sessions",
+                     "Long press to refresh", 0);
       return;
     }
     const Session *s = &g_model.sessions[idx->row];
     char sub[40];
     prv_session_subtitle(s, sub, sizeof(sub));
-    menu_cell_basic_draw(ctx, cell, s->title[0] ? s->title : "Untitled", sub[0] ? sub : NULL, NULL);
+    uint8_t marks = ((s->flags & SESSION_FLAG_UNREAD) ? THEME_MARK_NEW : 0) |
+                    ((s->flags & SESSION_FLAG_ACTIVE) ? THEME_MARK_WORKING : 0);
+    theme_draw_row(ctx, cell, s->title[0] ? s->title : "Untitled", sub[0] ? sub : NULL, marks);
     return;
   }
   switch (idx->row) {
     case MAIN_OPT_TELEGRAM:
-      menu_cell_basic_draw(ctx, cell, "Telegram sessions",
-                           g_model.include_telegram ? "Shown" : "Hidden", NULL);
+      theme_draw_row(ctx, cell, "Telegram sessions", g_model.include_telegram ? "Shown" : "Hidden", 0);
       break;
     case MAIN_OPT_REFRESH:
-      menu_cell_basic_draw(ctx, cell, "Refresh", NULL, NULL);
+      theme_draw_row(ctx, cell, "Refresh", NULL, 0);
       break;
   }
 }
@@ -787,7 +963,7 @@ static void prv_main_load(Window *window) {
     .select_click = prv_main_select,
     .select_long_click = prv_main_long_select,
   });
-  prv_menu_colors(s_main_menu);
+  theme_menu(s_main_menu);
   menu_layer_set_click_config_onto_window(s_main_menu, window);
   layer_add_child(root, menu_layer_get_layer(s_main_menu));
 }
@@ -851,10 +1027,16 @@ void ui_submit_changed(void) {
   if (s_session_menu) {
     menu_layer_reload_data(s_session_menu);
   }
-  if (g_model.submit == SUBMIT_FAILED || g_model.submit == SUBMIT_UNCERTAIN ||
-      g_model.submit == SUBMIT_READ_ONLY) {
-    vibes_double_pulse();
+  static SubmitState s_last_submit;
+  if (g_model.submit != s_last_submit) {
+    if (g_model.submit == SUBMIT_QUEUED) {
+      theme_vibe_sent();
+    } else if (g_model.submit == SUBMIT_FAILED || g_model.submit == SUBMIT_UNCERTAIN ||
+               g_model.submit == SUBMIT_READ_ONLY) {
+      theme_vibe_needs_you();
+    }
   }
+  s_last_submit = g_model.submit;
 }
 
 void ui_playback_changed(void) {
@@ -863,7 +1045,7 @@ void ui_playback_changed(void) {
     menu_layer_reload_data(s_session_menu);
   }
   if (g_model.playback == PLAYBACK_NEEDS_SPEAKER) {
-    vibes_short_pulse();
+    theme_vibe_needs_you();
   }
 }
 
@@ -885,20 +1067,26 @@ void ui_reply_received(const char *session_id, const char *message_id,
   }
   // Always show the card, even over the same session's history: it is the one place with Play,
   // Reply and Open session for this reply. The history behind it refreshes from the phone.
-  vibes_short_pulse();
+  if (flags & MESSAGE_FLAG_HAS_AUDIO) {
+    theme_vibe_voice();
+  } else {
+    theme_vibe_text();
+  }
   prv_open_message(MSG_MODE_REPLY, session_id, message_id, title[0] ? title : "New reply",
-                   ROLE_ASSISTANT, flags, text);
+                   ROLE_ASSISTANT, flags, text, true);
 }
 
 // ---------------------------------------------------------------------------
 
 void ui_init(void) {
+  theme_init();
   s_main_window = window_create();
   window_set_window_handlers(s_main_window, (WindowHandlers) {
     .load = prv_main_load,
     .unload = prv_main_unload,
   });
   window_stack_push(s_main_window, true);
+  splash_show();
 }
 
 void ui_deinit(void) {
@@ -918,4 +1106,6 @@ void ui_deinit(void) {
     window_destroy(s_audio_window);
   }
   window_destroy(s_main_window);
+  splash_deinit();
+  theme_deinit();
 }
