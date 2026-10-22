@@ -4,7 +4,8 @@
 
 #if defined(PBL_PLATFORM_APLITE)
 #define QUEUE_LEN 3
-#define OUTGOING_TEXT_LEN 256
+// Aplite has no microphone: only quick replies leave it.
+#define OUTGOING_TEXT_LEN 64
 #else
 #define QUEUE_LEN 6
 #define OUTGOING_TEXT_LEN 512
@@ -103,13 +104,18 @@ static void prv_pump(void) {
     case CMD_NEW_SESSION:
       dict_write_cstring(iter, MESSAGE_KEY_Text, p->text);
       break;
-    case CMD_PLAY:
+    case CMD_RESUME:
       dict_write_uint8(iter, MESSAGE_KEY_Route, p->route);
-      // fallthrough
+      break;
+    case CMD_PLAY:
+    case CMD_REPLAY:
+      dict_write_uint8(iter, MESSAGE_KEY_Route, p->route);
+      dict_write_cstring(iter, MESSAGE_KEY_SessionId, p->session_id);
+      dict_write_cstring(iter, MESSAGE_KEY_MessageId, p->message_id);
+      break;
     case CMD_PLAY_WATCH:
       dict_write_uint16(iter, MESSAGE_KEY_TextBudget, p->length);
       // fallthrough
-    case CMD_REPLAY:
     case CMD_OPEN_REPLY:
       dict_write_cstring(iter, MESSAGE_KEY_SessionId, p->session_id);
       dict_write_cstring(iter, MESSAGE_KEY_MessageId, p->message_id);
@@ -282,6 +288,9 @@ static void prv_inbox_received(DictionaryIterator *iter, void *ctx) {
       }
       break;
     }
+    case TYPE_AUDIO_ROUTE:
+      g_model.headphones = prv_int(iter, MESSAGE_KEY_State, 0) != 0;
+      break;
     case TYPE_STATUS:
       prv_set_conn(prv_int(iter, MESSAGE_KEY_State, CONN_ERROR), prv_str(iter, MESSAGE_KEY_Detail));
       break;
@@ -417,10 +426,17 @@ void comm_play(const char *session_id, const char *message_id, PlaybackRoute rou
   prv_enqueue(&p);
 }
 
-void comm_replay(const char *session_id, const char *message_id) {
+void comm_replay(const char *session_id, const char *message_id, PlaybackRoute route) {
   Pending p = prv_pending(CMD_REPLAY);
   prv_copy(p.session_id, session_id, SESSION_ID_LEN);
   prv_copy(p.message_id, message_id, MESSAGE_ID_LEN);
+  p.route = route;
+  prv_enqueue(&p);
+}
+
+void comm_resume(PlaybackRoute route) {
+  Pending p = prv_pending(CMD_RESUME);
+  p.route = route;
   prv_enqueue(&p);
 }
 

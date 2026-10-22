@@ -28,6 +28,9 @@
 // ---------------------------------------------------------------------------
 // Shared helpers
 
+// Where the last Play went; Resume and Replay go there too.
+static PlaybackRoute s_route = ROUTE_SPEAKER;
+
 static const char *prv_conn_label(void) {
   if (g_model.conn_detail[0]) {
     return g_model.conn_detail;
@@ -70,13 +73,23 @@ static const char *prv_playback_label(const char *message_id) {
     return g_model.playback_detail;
   }
   switch (g_model.playback) {
-    case PLAYBACK_PLAYING: return "Playing on phone";
+    case PLAYBACK_PLAYING: return s_route == ROUTE_HEADPHONES ? "Playing on headphones" : "Playing on phone";
     case PLAYBACK_PAUSED: return "Paused";
     case PLAYBACK_NEEDS_SPEAKER: return "No headphones";
     case PLAYBACK_ERROR: return "Playback failed";
     case PLAYBACK_DONE: return "Finished";
     default: return NULL;
   }
+}
+
+// Headphones on the phone when there are any; otherwise the phone itself, out loud.
+static PlaybackRoute prv_route(void) {
+  return g_model.headphones ? ROUTE_HEADPHONES : ROUTE_SPEAKER;
+}
+
+static void prv_play(const char *session_id, const char *message_id, PlaybackRoute route) {
+  s_route = route;
+  comm_play(session_id, message_id, route);
 }
 
 static const char *prv_role_label(uint8_t role) {
@@ -180,13 +193,22 @@ static void prv_open_compose(ComposeMode mode) {
   window_stack_push(s_compose_window, true);
 }
 
+// The composer with dictation already listening. Cancelling leaves the composer showing, so a
+// quick reply or another try is one press away; watches without a microphone just get the composer.
+static void prv_open_dictation(ComposeMode mode) {
+  prv_open_compose(mode);
+  if (prv_has_dictation()) {
+    dictation_session_start(s_dictation);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Message / reply window
 
 typedef enum { MSG_MODE_MESSAGE, MSG_MODE_REPLY } MessageMode;
 
 typedef enum {
-  ACT_PLAY = 1,
+  ACT_PLAY_HEADPHONES = 1,
   ACT_PLAY_SPEAKER,
   ACT_PAUSE,
   ACT_RESUME,
@@ -228,6 +250,7 @@ static char *s_msg_shown;
 static size_t s_msg_shown_len;
 
 static void prv_open_session_window(void);
+static void prv_shed_history(void);
 
 static bool prv_msg_playing(void) {
   return strcmp(g_model.playback_message_id, s_msg_id) == 0 && g_model.playback == PLAYBACK_PLAYING;
@@ -356,11 +379,11 @@ static void prv_msg_layout(void) {
 static void prv_msg_action(ActionMenu *menu, const ActionMenuItem *item, void *ctx) {
   MessageAction act = (MessageAction)(uintptr_t)action_menu_item_get_action_data(item);
   switch (act) {
-    case ACT_PLAY: comm_play(s_msg_session_id, s_msg_id, ROUTE_CURRENT); break;
-    case ACT_PLAY_SPEAKER: comm_play(s_msg_session_id, s_msg_id, ROUTE_SPEAKER); break;
+    case ACT_PLAY_HEADPHONES: prv_play(s_msg_session_id, s_msg_id, ROUTE_HEADPHONES); break;
+    case ACT_PLAY_SPEAKER: prv_play(s_msg_session_id, s_msg_id, ROUTE_SPEAKER); break;
     case ACT_PAUSE: comm_simple(CMD_PAUSE); break;
-    case ACT_RESUME: comm_simple(CMD_RESUME); break;
-    case ACT_REPLAY: comm_replay(s_msg_session_id, s_msg_id); break;
+    case ACT_RESUME: comm_resume(s_route); break;
+    case ACT_REPLAY: comm_replay(s_msg_session_id, s_msg_id, s_route); break;
     case ACT_STOP: comm_simple(CMD_STOP); break;
     case ACT_WATCH_PLAY: wspk_play(s_msg_session_id, s_msg_id); break;
     case ACT_WATCH_PAUSE: wspk_pause(); break;
@@ -403,7 +426,11 @@ static void prv_msg_select(ClickRecognizerRef rec, void *ctx) {
     action_menu_level_add_action(root, "Resume", prv_msg_action, (void *)ACT_RESUME);
     action_menu_level_add_action(root, "Stop", prv_msg_action, (void *)ACT_STOP);
   } else {
-    action_menu_level_add_action(root, "Play", prv_msg_action, (void *)ACT_PLAY);
+    // The phone reports whether headphones are connected; the option only shows while they are.
+    if (g_model.headphones) {
+      action_menu_level_add_action(root, "Play on headphones", prv_msg_action, (void *)ACT_PLAY_HEADPHONES);
+    }
+    action_menu_level_add_action(root, "Play on phone speaker", prv_msg_action, (void *)ACT_PLAY_SPEAKER);
   }
   if (wspk_supported()) {
     // The watch's own speaker: always an explicit choice, never a fallback for the phone route.
@@ -431,7 +458,6 @@ static void prv_msg_select(ClickRecognizerRef rec, void *ctx) {
         break;
     }
   }
-  action_menu_level_add_action(root, "Play on phone speaker", prv_msg_action, (void *)ACT_PLAY_SPEAKER);
   action_menu_level_add_action(root, "Replay from start", prv_msg_action, (void *)ACT_REPLAY);
   if (s_msg_mode == MSG_MODE_REPLY) {
     action_menu_level_add_action(root, "Reply", prv_msg_action, (void *)ACT_REPLY);
@@ -558,6 +584,7 @@ static void prv_open_message(MessageMode mode, const char *session_id, const cha
   s_msg_header[TITLE_LEN - 1] = '\0';
   prv_msg_set_body(text, flags);
   s_msg_intro = intro && MOTION_ENABLED;
+  prv_shed_history();
 
   if (!s_msg_window) {
     s_msg_window = window_create();
@@ -661,6 +688,28 @@ static void prv_session_load(Window *window) {
   layer_add_child(root, menu_layer_get_layer(s_session_menu));
 }
 
+// Aplite's heap cannot hold a session's history, a reply card and its action menu at once. The
+// history is hidden behind the card anyway: drop it, and fetch it again when it shows.
+static bool s_history_shed;
+
+static void prv_shed_history(void) {
+#if defined(PBL_PLATFORM_APLITE)
+  if (s_session_window && window_stack_contains_window(s_session_window) && g_model.message_count) {
+    model_clear_messages();
+    s_history_shed = true;
+  }
+#endif
+}
+
+static void prv_session_appear(Window *window) {
+  if (s_history_shed) {
+    s_history_shed = false;
+    g_model.messages_loading = true;
+    comm_open_session(g_model.open_session_id);
+    menu_layer_reload_data(s_session_menu);
+  }
+}
+
 static void prv_session_unload(Window *window) {
   menu_layer_destroy(s_session_menu);
   s_session_menu = NULL;
@@ -683,6 +732,7 @@ static void prv_open_session_window(void) {
     s_session_window = window_create();
     window_set_window_handlers(s_session_window, (WindowHandlers) {
       .load = prv_session_load,
+      .appear = prv_session_appear,
       .unload = prv_session_unload,
     });
   }
@@ -745,18 +795,21 @@ static void prv_audio_draw(GContext *ctx, const Layer *cell, MenuIndex *idx, voi
                  THEME_MARK_WAVE | ((a->flags & AUDIO_FLAG_NEW) ? THEME_MARK_NEW : 0));
 }
 
+static void prv_open_audio_item(AudioItem *a) {
+  a->flags &= ~AUDIO_FLAG_NEW;
+  // Show the preview at once; the phone answers with the full reply, which replaces it.
+  prv_open_message(MSG_MODE_REPLY, a->session_id, a->message_id, a->title[0] ? a->title : "Hermes",
+                   ROLE_ASSISTANT, MESSAGE_FLAG_HAS_AUDIO, a->preview, false);
+  comm_open_reply(a->session_id, a->message_id);
+}
+
 static void prv_audio_select(MenuLayer *menu, MenuIndex *idx, void *ctx) {
   if (g_model.audio_count == 0) {
     comm_list_audio();
     menu_layer_reload_data(menu);
     return;
   }
-  AudioItem *a = &g_model.audio[idx->row];
-  a->flags &= ~AUDIO_FLAG_NEW;
-  // Show the preview at once; the phone answers with the full reply, which replaces it.
-  prv_open_message(MSG_MODE_REPLY, a->session_id, a->message_id, a->title[0] ? a->title : "Hermes",
-                   ROLE_ASSISTANT, MESSAGE_FLAG_HAS_AUDIO, a->preview, false);
-  comm_open_reply(a->session_id, a->message_id);
+  prv_open_audio_item(&g_model.audio[idx->row]);
 }
 
 static void prv_audio_long_select(MenuLayer *menu, MenuIndex *idx, void *ctx) {
@@ -802,7 +855,15 @@ static void prv_open_audio_window(void) {
 
 enum { MAIN_SECTION_TOP, MAIN_SECTION_SESSIONS, MAIN_SECTION_OPTIONS, MAIN_SECTION_COUNT };
 enum { MAIN_TOP_AUDIO, MAIN_TOP_NEW, MAIN_TOP_COUNT };
-enum { MAIN_OPT_TELEGRAM, MAIN_OPT_REFRESH, MAIN_OPT_COUNT };
+enum { MAIN_OPT_TELEGRAM, MAIN_OPT_QUICK, MAIN_OPT_REFRESH, MAIN_OPT_COUNT };
+
+static const char *const QUICK_LABELS[QUICK_COUNT] = {
+  [QUICK_MAIN_MENU] = "Main menu",
+  [QUICK_DICTATE] = "Dictate new session",
+  [QUICK_RECENT_AUDIO] = "Recent audio",
+  [QUICK_PLAY_LATEST] = "Play latest audio",
+  [QUICK_LAST_SESSION] = "Last session",
+};
 
 static Window *s_main_window;
 static MenuLayer *s_main_menu;
@@ -904,6 +965,9 @@ static void prv_main_draw(GContext *ctx, const Layer *cell, MenuIndex *idx, void
     case MAIN_OPT_TELEGRAM:
       theme_draw_row(ctx, cell, "Telegram sessions", g_model.include_telegram ? "Shown" : "Hidden", 0);
       break;
+    case MAIN_OPT_QUICK:
+      theme_draw_row(ctx, cell, "Quick launch", QUICK_LABELS[g_model.quick_launch], 0);
+      break;
     case MAIN_OPT_REFRESH:
       theme_draw_row(ctx, cell, "Refresh", NULL, 0);
       break;
@@ -935,6 +999,11 @@ static void prv_main_select(MenuLayer *menu, MenuIndex *idx, void *ctx) {
       model_save_prefs();
       comm_list_sessions();
       comm_list_audio();
+      menu_layer_reload_data(menu);
+      break;
+    case MAIN_OPT_QUICK:
+      g_model.quick_launch = (g_model.quick_launch + 1) % QUICK_COUNT;
+      model_save_prefs();
       menu_layer_reload_data(menu);
       break;
     case MAIN_OPT_REFRESH:
@@ -977,6 +1046,15 @@ static void prv_main_unload(Window *window) {
 // Comm callbacks
 
 void ui_sessions_changed(void) {
+  // A session opened before the list arrived (Quick launch) gets its title now.
+  if (s_session_menu && !g_model.open_session_title[0]) {
+    const Session *s = model_find_session(g_model.open_session_id);
+    if (s) {
+      strncpy(g_model.open_session_title, s->title, TITLE_LEN - 1);
+      g_model.open_session_flags = s->flags;
+      menu_layer_reload_data(s_session_menu);
+    }
+  }
   if (!s_main_menu) {
     return;
   }
@@ -995,7 +1073,23 @@ void ui_sessions_changed(void) {
   }
 }
 
+static bool s_play_latest_pending;
+
+static void prv_play_latest(void) {
+  s_play_latest_pending = false;
+  if (g_model.audio_count == 0 || window_stack_get_top_window() != s_audio_window) {
+    return; // nothing to play, or the user has already moved on
+  }
+  prv_open_audio_item(&g_model.audio[0]);
+  prv_play(s_msg_session_id, s_msg_id, prv_route());
+}
+
 void ui_audio_changed(void) {
+  // The first complete list is the phone's saved copy, which it keeps current while it checks
+  // Hermes: good enough to start playing at once.
+  if (s_play_latest_pending && !g_model.audio_loading) {
+    prv_play_latest();
+  }
   if (s_audio_menu) {
     menu_layer_reload_data(s_audio_menu);
   }
@@ -1078,6 +1172,29 @@ void ui_reply_received(const char *session_id, const char *message_id,
 
 // ---------------------------------------------------------------------------
 
+static void prv_quick_launch(void *ctx) {
+  switch (g_model.quick_launch) {
+    case QUICK_DICTATE:
+      prv_open_dictation(COMPOSE_NEW_SESSION);
+      break;
+    case QUICK_RECENT_AUDIO:
+      prv_open_audio_window();
+      break;
+    case QUICK_PLAY_LATEST:
+      // Recent audio shows while the list arrives; the newest reply then opens and plays.
+      s_play_latest_pending = true;
+      prv_open_audio_window();
+      break;
+    case QUICK_LAST_SESSION:
+      if (g_model.open_session_id[0]) {
+        prv_open_session_window();
+      }
+      break;
+    default:
+      break;
+  }
+}
+
 void ui_init(void) {
   theme_init();
   s_main_window = window_create();
@@ -1086,6 +1203,12 @@ void ui_init(void) {
     .unload = prv_main_unload,
   });
   window_stack_push(s_main_window, true);
+  if (launch_reason() == APP_LAUNCH_QUICK_LAUNCH && g_model.quick_launch != QUICK_MAIN_MENU) {
+    // Straight to the shortcut, no splash; Back still lands on the main menu. Started once the
+    // event loop runs, so dictation opens over a window that has loaded.
+    app_timer_register(50, prv_quick_launch, NULL);
+    return;
+  }
   splash_show();
 }
 

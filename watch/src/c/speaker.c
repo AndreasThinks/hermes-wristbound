@@ -1,4 +1,5 @@
 #include "speaker.h"
+#include "theme.h"
 #include "comm.h"
 #include "model.h"
 
@@ -92,7 +93,7 @@ static void prv_end(WatchSpeakerState state, const char *detail) {
   s_status[DETAIL_LEN - 1] = '\0';
   APP_LOG(APP_LOG_LEVEL_INFO, "watch speaker %s: %s", s_message_id, detail);
   if (state == WSPK_FAILED) {
-    vibes_short_pulse();
+    theme_vibe_needs_you();
   }
   prv_notify();
 }

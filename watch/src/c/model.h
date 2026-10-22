@@ -3,7 +3,6 @@
 #include <pebble.h>
 #include "protocol.h"
 
-#define MAX_SESSIONS 20
 #define MAX_MESSAGES 12
 #define SESSION_ID_LEN 72
 #define MESSAGE_ID_LEN 40
@@ -11,9 +10,13 @@
 #define DETAIL_LEN 64
 #define PREVIEW_LEN 64
 
+// Aplite's heap shares 24 KB with the code and these lists: fewer rows leave room for the
+// reply card and its action menu.
 #if defined(PBL_PLATFORM_APLITE)
+#define MAX_SESSIONS 12
 #define MAX_AUDIO 5
 #else
+#define MAX_SESSIONS 20
 #define MAX_AUDIO 15
 #endif
 
@@ -48,11 +51,23 @@ typedef struct {
   uint8_t flags;
 } AudioItem;
 
+// What a Quick Launch shortcut to the app does.
+typedef enum {
+  QUICK_MAIN_MENU = 0,
+  QUICK_DICTATE,      // a new session, straight into dictation
+  QUICK_RECENT_AUDIO,
+  QUICK_PLAY_LATEST,  // open the newest Recent audio reply and play it
+  QUICK_LAST_SESSION,
+  QUICK_COUNT,
+} QuickLaunch;
+
 typedef struct {
   ConnState conn;
   char conn_detail[DETAIL_LEN];
 
   bool include_telegram;
+  QuickLaunch quick_launch;
+  bool headphones; // headphones are connected to the phone
   Session sessions[MAX_SESSIONS];
   int session_count;
   bool sessions_loading;

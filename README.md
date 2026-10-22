@@ -10,7 +10,7 @@ A Pebble watchapp and Android companion for using [Hermes Agent](https://github.
   <img src="docs/screenshots/recent-audio.png" width="144" alt="Recent audio: audio replies from any session, newest first, with age and a preview">
   <img src="docs/screenshots/session.png" width="144" alt="An open session, newest message first, with a Reply row on top">
   <img src="docs/screenshots/reply.png" width="144" alt="A full Hermes reply">
-  <img src="docs/screenshots/actions.png" width="144" alt="Reply actions: Play, Play on phone speaker, Replay from start">
+  <img src="docs/screenshots/actions.png" width="144" alt="Reply actions: Play on headphones, Play on phone speaker, Replay from start">
   <img src="docs/screenshots/compose.png" width="144" alt="Compose: Dictate, or a quick reply such as Yes, No, Continue">
   <img src="docs/screenshots/working.png" width="144" alt="A sent reply showing Hermes is working, with a block cursor">
 </p>
@@ -62,8 +62,9 @@ The phone talks to Hermes the way the Hermes desktop app and Hermes-Relay do: it
 - **Sessions:** recent sessions with unread, Telegram, working and read-only labels; a Telegram show/hide toggle; New session; Refresh (or long-press). The last session is remembered across launches.
 - **History:** recent messages, newest first, and a full-screen view for each reply.
 - **Reply:** dictation where the watch has a microphone, or a quick reply (Yes, No, Continue, Thanks, Stop, Summarise that). Each send shows queued, working, completed, failed, uncertain or read-only.
-- **Playback** of one exact reply: Play, Play on phone speaker, Pause, Resume, Replay from start, Stop.
+- **Playback** of one exact reply: Play on headphones (shown only while headphones are connected to the phone), Play on phone speaker (the phone's own speaker, even with headphones in), Pause, Resume, Replay from start, Stop.
 - **Play on watch speaker** (Pebble Time 2 and Pebble 2 Duo): the reply's own Hermes audio, streamed from the phone and played by the watch, with buffering progress, Pause/Resume, Stop and Replay on watch. Always an explicit choice; it never falls back to the phone's speaker. Clips are capped at 2 minutes. Other watches do not show the action.
+- **Quick Launch:** assign Wristbound to a Quick Launch button in the Pebble settings, then pick what it does under *Options → Quick launch* in the app: the main menu, *Dictate new session* (straight into dictation for a new session), *Recent audio*, *Play latest audio* (opens and plays the newest audio reply, on headphones if connected, otherwise the phone speaker) or *Last session*. Opening the app normally always shows the main menu.
 - **Alerts:** an incoming-reply card when the app is open, even over the same session, with Play, Reply, Open session and Dismiss.
 - Clear connection states: connected, offline with cached data, stale, not set up, sign-in failed.
 
@@ -73,7 +74,7 @@ The phone talks to Hermes the way the Hermes desktop app and Hermes-Relay do: it
 - Runs turns over Hermes' gateway socket with at-most-once submission: if a connection drops after sending, it looks for the answer in the transcript or re-attaches to the running turn, and reports *uncertain* rather than sending twice.
 - Delivers replies to the open watchapp, or as one phone notification mirrored to the Pebble with Play, Play on speaker and Read on watch actions.
 - Replies that arrive through Telegram, Ringbearer or the desktop are checked for while the watchapp is open (every 30 s), and with optional background checking also while it is closed and the phone is locked.
-- Plays a reply on the current audio route: Hermes' own audio for that reply, otherwise the reply read again in Hermes' configured voice, otherwise the phone's voice. Playback pauses when headphones disconnect instead of switching to the speaker; speaker playback is always explicit.
+- Plays a reply on headphones or on the phone's speaker, whichever the watch picked: Hermes' own audio for that reply, otherwise the reply read again in Hermes' configured voice, otherwise the phone's voice. Headphone playback pauses when they disconnect instead of switching to the speaker; speaker playback is always explicit and uses the phone's speaker even while headphones are connected. The watch is told whenever headphones connect or disconnect.
 - One alert policy for every delivery path, with separate settings for session visibility, Telegram text alerts, Telegram audio alerts, replying to Telegram sessions, tool activity and notification privacy. Polling checkpoints persist, so a failed fetch or a restart never loses or repeats an alert.
 - A bounded offline cache with no stored media.
 

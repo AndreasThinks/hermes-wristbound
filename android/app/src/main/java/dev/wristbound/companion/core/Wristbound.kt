@@ -68,7 +68,6 @@ class Wristbound private constructor(context: Context) {
     @Volatile var watchOpen = false
         private set
     @Volatile private var textBudget = Protocol.DEFAULT_TEXT_BUDGET
-    @Volatile private var lastAllowSpeaker = false
     @Volatile private var pendingReply: Pair<String, String>? = null
     @Volatile private var lastSend: Triple<String, String, Long>? = null
 
@@ -90,6 +89,13 @@ class Wristbound private constructor(context: Context) {
     private val audioDir = File(app.cacheDir, "audio").apply { mkdirs() }
 
     private data class Reply(val text: String, val audio: List<String>)
+
+    init {
+        // The watch offers "Play on headphones" only while there are some, so keep it told.
+        playback.watchHeadphones { connected ->
+            if (watchOpen) scope.launch { watch.send(WatchCodec.audioRoute(connected)) }
+        }
+    }
 
     @Volatile private var client: DashboardClient? = null
 
@@ -172,6 +178,7 @@ class Wristbound private constructor(context: Context) {
                 if (cmd.protoVersion != Protocol.VERSION) {
                     watch.send(WatchCodec.status(Protocol.Conn.ERROR, "Update watch or phone app"))
                 }
+                watch.send(WatchCodec.audioRoute(playback.hasPrivateOutput()))
                 pushSessions()
                 // The saved list only: the watch asks for a refresh when Recent audio is opened.
                 sendAudioPages(state.loadAudio())
@@ -188,9 +195,9 @@ class Wristbound private constructor(context: Context) {
             is WatchCommand.Send -> submit(cmd.sessionId, cmd.text)
             is WatchCommand.NewSession -> newSession(cmd.text)
             is WatchCommand.Play -> play(cmd.sessionId, cmd.messageId, cmd.speaker)
-            is WatchCommand.Replay -> play(cmd.sessionId, cmd.messageId, lastAllowSpeaker)
+            is WatchCommand.Replay -> play(cmd.sessionId, cmd.messageId, cmd.speaker)
             WatchCommand.Pause -> playback.pause()
-            WatchCommand.Resume -> playback.resume(lastAllowSpeaker)
+            is WatchCommand.Resume -> playback.resume(cmd.speaker)
             WatchCommand.Stop -> playback.stop()
             is WatchCommand.ListAudio -> {
                 settings.includeTelegram = cmd.includeTelegram
@@ -580,16 +587,16 @@ class Wristbound private constructor(context: Context) {
     /**
      * Play one exact reply. In order: audio Hermes attached to it (its text-to-speech tool
      * output), then the reply text spoken again in Hermes' configured voice (newly generated,
-     * not the voice note Telegram may have received), then the phone's voice.
+     * not the voice note Telegram may have received), then the phone's voice. [speaker] plays it
+     * on the phone's own speaker; otherwise only on headphones.
      */
-    suspend fun play(sessionId: String, messageId: String, allowSpeaker: Boolean) {
-        lastAllowSpeaker = allowSpeaker
+    suspend fun play(sessionId: String, messageId: String, speaker: Boolean) {
         val reply = replyFor(sessionId, messageId)
         if (reply == null) {
             onPlaybackState(messageId, Protocol.Playback.ERROR, "Reply not found")
             return
         }
-        if (!allowSpeaker && !playback.hasPrivateOutput()) {
+        if (!speaker && !playback.hasPrivateOutput()) {
             onPlaybackState(messageId, Protocol.Playback.NEEDS_SPEAKER, "No headphones")
             return
         }
@@ -608,8 +615,8 @@ class Wristbound private constructor(context: Context) {
                 ?.let { it to "Hermes voice, read again" }
         }
         pruneAudio()
-        if (clip != null) playback.playFile(messageId, clip.first.file, allowSpeaker, clip.second)
-        else playback.play(messageId, Text.forSpeech(reply.text), allowSpeaker)
+        if (clip != null) playback.playFile(messageId, clip.first.file, speaker, clip.second)
+        else playback.play(messageId, Text.forSpeech(reply.text), speaker)
     }
 
     // -- watch speaker ----------------------------------------------------------------------------

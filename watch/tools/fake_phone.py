@@ -5,6 +5,7 @@ It speaks the AppMessage protocol from docs/PROTOCOL.md with canned data: no Her
 
     pebble install --emulator basalt
     python3 tools/fake_phone.py basalt &      # run with pebble-tool's Python (needs libpebble2)
+    python3 tools/fake_phone.py basalt headphones &   # as if headphones were connected to the phone
     pebble emu-button click select --emulator basalt
     pebble screenshot --emulator basalt
 
@@ -51,7 +52,7 @@ AUDIO = [
 TONE = bytes(int(100 * math.sin(2 * math.pi * 440 * i / 8000)) & 0xFF for i in range(8000 * 4))
 
 
-def main(platform):
+def main(platform, headphones):
     state = json.load(open("/tmp/pb-emulator.json"))[platform]
     port = next(iter(state.values()))["pypkjs"]["port"]
     pebble = PebbleConnection(WebsocketTransport(f"ws://localhost:{port}/"))
@@ -123,6 +124,8 @@ def main(platform):
         named = {NAMES.get(k, k): v for k, v in data.items()}
         print("watch ->", {k: v for k, v in named.items() if k != "Data"}, flush=True)
         cmd = named.get("Cmd")
+        if cmd == 1:
+            send({"Type": 11, "State": 1 if headphones else 0})
         if cmd == 1 or cmd == 2:
             send_sessions(named.get("Filter", 1))
             if cmd == 1:
@@ -142,9 +145,11 @@ def main(platform):
             send({"Type": 6, "SessionId": sid, "State": 3, "Detail": "Reply received"})
             send({"Type": 4, "SessionId": sid, "MessageId": "5", "Title": "Watch chat",
                   "Text": "Noted: " + named.get("Text", ""), "Flags": 0})
-        elif cmd == 6:
+        elif cmd in (6, 9):
             if named.get("Route") == 1:
-                send({"Type": 5, "MessageId": named["MessageId"], "State": 1, "Detail": "Playing on speaker"})
+                send({"Type": 5, "MessageId": named["MessageId"], "State": 1, "Detail": "Playing on phone speaker"})
+            elif headphones:
+                send({"Type": 5, "MessageId": named["MessageId"], "State": 1, "Detail": "Playing on headphones"})
             else:
                 send({"Type": 5, "MessageId": named["MessageId"], "State": 3, "Detail": "No headphones"})
         elif cmd == 13:
@@ -164,4 +169,4 @@ def main(platform):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "basalt")
+    main(sys.argv[1] if len(sys.argv) > 1 else "basalt", "headphones" in sys.argv[2:])

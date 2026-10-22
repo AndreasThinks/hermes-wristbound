@@ -24,8 +24,9 @@ void comm_open_session(const char *session_id);
 void comm_send(const char *session_id, const char *text);
 void comm_new_session(const char *text);
 void comm_play(const char *session_id, const char *message_id, PlaybackRoute route);
-void comm_replay(const char *session_id, const char *message_id);
-void comm_simple(Command cmd); // PAUSE, RESUME, STOP
+void comm_replay(const char *session_id, const char *message_id, PlaybackRoute route);
+void comm_resume(PlaybackRoute route);
+void comm_simple(Command cmd); // PAUSE, STOP
 void comm_list_audio(void);
 void comm_open_reply(const char *session_id, const char *message_id);
 void comm_play_watch(const char *session_id, const char *message_id, uint16_t chunk);

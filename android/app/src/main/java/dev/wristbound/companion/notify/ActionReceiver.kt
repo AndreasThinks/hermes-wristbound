@@ -16,8 +16,8 @@ class ActionReceiver : BroadcastReceiver() {
         controller.scope.launch {
             try {
                 when (intent.action) {
-                    ACTION_PLAY -> controller.play(sessionId, messageId, allowSpeaker = false)
-                    ACTION_PLAY_SPEAKER -> controller.play(sessionId, messageId, allowSpeaker = true)
+                    ACTION_PLAY -> controller.play(sessionId, messageId, speaker = false)
+                    ACTION_PLAY_SPEAKER -> controller.play(sessionId, messageId, speaker = true)
                     ACTION_OPEN_ON_WATCH -> controller.openReplyOnWatch(sessionId, messageId)
                 }
             } finally {

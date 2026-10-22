@@ -2,6 +2,7 @@
 
 #define PERSIST_INCLUDE_TELEGRAM 1
 #define PERSIST_OPEN_SESSION 2
+#define PERSIST_QUICK_LAUNCH 3
 
 Model g_model;
 
@@ -11,6 +12,9 @@ void model_init(void) {
   strncpy(g_model.conn_detail, "Connecting...", DETAIL_LEN - 1);
   g_model.include_telegram = persist_exists(PERSIST_INCLUDE_TELEGRAM)
       ? persist_read_bool(PERSIST_INCLUDE_TELEGRAM) : true;
+  if (persist_exists(PERSIST_QUICK_LAUNCH)) {
+    g_model.quick_launch = persist_read_int(PERSIST_QUICK_LAUNCH) % QUICK_COUNT;
+  }
   if (persist_exists(PERSIST_OPEN_SESSION)) {
     persist_read_string(PERSIST_OPEN_SESSION, g_model.open_session_id, SESSION_ID_LEN);
   }
@@ -18,6 +22,7 @@ void model_init(void) {
 
 void model_save_prefs(void) {
   persist_write_bool(PERSIST_INCLUDE_TELEGRAM, g_model.include_telegram);
+  persist_write_int(PERSIST_QUICK_LAUNCH, g_model.quick_launch);
   if (g_model.open_session_id[0]) {
     persist_write_string(PERSIST_OPEN_SESSION, g_model.open_session_id);
   } else {
