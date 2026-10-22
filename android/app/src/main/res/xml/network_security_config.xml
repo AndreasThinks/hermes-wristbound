@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- HTTPS everywhere by default. Cleartext HTTP is allowed only to Tailscale MagicDNS names
+     (*.ts.net), whose traffic is already WireGuard-encrypted. Recommended setup is HTTPS via
+     `tailscale serve` in front of a loopback-bound Hermes API server. The bearer token is
+     required on every request either way: Tailscale reachability is not authentication. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">ts.net</domain>
+    </domain-config>
+</network-security-config>

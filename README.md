@@ -2,7 +2,9 @@
 
 A Pebble watch app and Android companion for using [Hermes Agent](https://github.com/NousResearch/hermes-agent) without taking your phone out.
 
-**Status: proposal and documentation only. No application code, builds or working integration yet.**
+**Status: incomplete initial implementation on `feat/initial-client`.** Android debug packaging has been verified locally. The Pebble app is partial; functional, audio-delivery and real-device acceptance remain unverified. This is not a release.
+
+**Continuing in Claude Code Cloud? Start with [the Cloud handoff](docs/CLOUD-HANDOFF.md) and `CLAUDE.md`.** They record verified progress, missing pieces, Telegram text/audio notification requirements and build prerequisites.
 
 ## The experience
 
@@ -49,7 +51,7 @@ Replacing Hermes, rebuilding Telegram, changing Ringbearer's working ingress, or
 
 ## Development
 
-There is no build or test command yet. Platform choices and exact API contracts are pending discovery. Expected components are a native Android companion and a Pebble watch app; no framework or SDK version is pinned yet.
+The partial implementation contains Kotlin Android and C Pebble sources. See [the Cloud handoff](docs/CLOUD-HANDOFF.md) for build setup, the verified Android command and remaining acceptance work. The original design documents below describe the target, not completed features.
 
 ## License
 

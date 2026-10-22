@@ -26,3 +26,6 @@ media-cache/
 *.sqlite
 *.sqlite3
 .DS_Store
+
+# Project-local toolchain and caches (scripts/bootstrap-toolchain.sh)
+.toolchain/
