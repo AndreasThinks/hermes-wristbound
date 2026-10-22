@@ -58,6 +58,8 @@ class Notifier(private val context: Context) {
         }
         val n = NotificationCompat.Builder(context, CH_REPLIES)
             .setSmallIcon(R.drawable.ic_notification)
+            // Phosphor's accents: violet when Hermes speaks, green otherwise.
+            .setColor(ContextCompat.getColor(context, if (hasAudio) R.color.phosphor_voice else R.color.phosphor_signal))
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))

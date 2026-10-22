@@ -21,6 +21,11 @@ sealed class WatchCommand {
     data object Stop : WatchCommand()
     data class ListAudio(val includeTelegram: Boolean) : WatchCommand()
     data class OpenReply(val sessionId: String, val messageId: String) : WatchCommand()
+    /** Play one reply on the watch's own speaker; [chunkBytes] is the most PCM one message can carry. */
+    data class PlayOnWatch(val sessionId: String, val messageId: String, val chunkBytes: Int) : WatchCommand()
+    /** The watch has room for [length] more bytes of [messageId]'s PCM, starting at [offset]. */
+    data class AudioPull(val messageId: String, val offset: Int, val length: Int) : WatchCommand()
+    data class AudioStop(val messageId: String) : WatchCommand()
 }
 
 /** Pure encoding/decoding between the protocol and PebbleKit dictionaries. */
@@ -67,6 +72,18 @@ object WatchCodec {
             Protocol.Cmd.RESUME -> WatchCommand.Resume
             Protocol.Cmd.STOP -> WatchCommand.Stop
             Protocol.Cmd.LIST_AUDIO -> WatchCommand.ListAudio((int(Key.FILTER) ?: 1) != 0)
+            Protocol.Cmd.PLAY_WATCH -> {
+                val sid = str(Key.SESSION_ID)?.takeIf { it.isNotEmpty() } ?: return null
+                val mid = str(Key.MESSAGE_ID)?.takeIf { it.isNotEmpty() } ?: return null
+                WatchCommand.PlayOnWatch(sid, mid, (int(Key.TEXT_BUDGET) ?: 0).coerceIn(256, 8000))
+            }
+            Protocol.Cmd.AUDIO_PULL -> {
+                val mid = str(Key.MESSAGE_ID)?.takeIf { it.isNotEmpty() } ?: return null
+                val offset = int(Key.OFFSET)?.takeIf { it >= 0 } ?: return null
+                val length = int(Key.LENGTH)?.takeIf { it >= 0 } ?: return null
+                WatchCommand.AudioPull(mid, offset, length)
+            }
+            Protocol.Cmd.AUDIO_STOP -> str(Key.MESSAGE_ID)?.let { WatchCommand.AudioStop(it) }
             Protocol.Cmd.OPEN_REPLY -> {
                 val sid = str(Key.SESSION_ID)?.takeIf { it.isNotEmpty() } ?: return null
                 val mid = str(Key.MESSAGE_ID)?.takeIf { it.isNotEmpty() } ?: return null
@@ -119,6 +136,23 @@ object WatchCodec {
             put(Key.TIME, PebbleDictionaryItem.UInt32(item.timestamp.toLong().coerceIn(0, UInt.MAX_VALUE.toLong()).toUInt()))
         }
     }
+
+    /** Announces a watch-speaker clip: [length] bytes of PCM in [format], described by [label]. */
+    fun audioStart(messageId: String, length: Int, format: Int, label: String): PebbleDictionary = mapOf(
+        Key.TYPE to u8(Protocol.Type.AUDIO_START),
+        Key.MESSAGE_ID to text(messageId, Protocol.MESSAGE_ID_BUDGET),
+        Key.LENGTH to PebbleDictionaryItem.UInt32(length.toUInt()),
+        Key.STATE to u8(format),
+        Key.DETAIL to text(label, Protocol.DETAIL_BUDGET),
+    )
+
+    /** One chunk of a watch-speaker clip, at byte [offset]. */
+    fun audioData(messageId: String, offset: Int, data: ByteArray): PebbleDictionary = mapOf(
+        Key.TYPE to u8(Protocol.Type.AUDIO_DATA),
+        Key.MESSAGE_ID to text(messageId, Protocol.MESSAGE_ID_BUDGET),
+        Key.OFFSET to PebbleDictionaryItem.UInt32(offset.toUInt()),
+        Key.DATA to PebbleDictionaryItem.Bytes(data),
+    )
 
     fun status(state: Protocol.Conn, detail: String): PebbleDictionary = mapOf(
         Key.TYPE to u8(Protocol.Type.STATUS),

@@ -1,7 +1,7 @@
 {
   "name": "hermes-wristbound",
   "author": "Hermes Wristbound",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "keywords": ["pebble-app"],
   "private": true,
   "dependencies": {},
@@ -40,10 +40,41 @@
       "Detail",
       "Filter",
       "Route",
-      "Time"
+      "Time",
+      "Data",
+      "Offset",
+      "Length"
     ],
     "resources": {
-      "media": []
+      "media": [
+        {
+          "type": "font",
+          "name": "FONT_PIXEL_8",
+          "file": "fonts/Silkscreen-Regular.ttf",
+          "characterRegex": "[ -~]",
+          "targetPlatforms": [
+            "basalt",
+            "chalk",
+            "diorite",
+            "emery",
+            "flint",
+            "gabbro"
+          ]
+        },
+        {
+          "type": "bitmap",
+          "name": "IMAGE_SPLASH",
+          "file": "images/splash.png",
+          "targetPlatforms": [
+            "basalt",
+            "chalk",
+            "diorite",
+            "emery",
+            "flint",
+            "gabbro"
+          ]
+        }
+      ]
     },
     "companionApp": {
       "android": {

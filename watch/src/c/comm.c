@@ -1,5 +1,6 @@
 #include "comm.h"
 #include "model.h"
+#include "speaker.h"
 
 #if defined(PBL_PLATFORM_APLITE)
 #define QUEUE_LEN 3
@@ -7,6 +8,11 @@
 #else
 #define QUEUE_LEN 6
 #define OUTGOING_TEXT_LEN 512
+#endif
+#if defined(PBL_PLATFORM_FLINT)
+#define SPEAKER_INBOX 2400
+#else
+#define SPEAKER_INBOX 4200
 #endif
 #define MAX_RETRIES 3
 #define RETRY_MS 600
@@ -17,6 +23,8 @@ typedef struct {
   char message_id[MESSAGE_ID_LEN];
   char text[OUTGOING_TEXT_LEN];
   uint8_t route;
+  uint32_t offset;
+  uint32_t length;
 } Pending;
 
 static CommHandlers s_handlers;
@@ -26,6 +34,7 @@ static int s_count;
 static bool s_in_flight;
 static int s_retries;
 static AppTimer *s_retry_timer;
+static uint32_t s_inbox_size;
 
 static void prv_pump(void);
 
@@ -97,9 +106,20 @@ static void prv_pump(void) {
     case CMD_PLAY:
       dict_write_uint8(iter, MESSAGE_KEY_Route, p->route);
       // fallthrough
+    case CMD_PLAY_WATCH:
+      dict_write_uint16(iter, MESSAGE_KEY_TextBudget, p->length);
+      // fallthrough
     case CMD_REPLAY:
     case CMD_OPEN_REPLY:
       dict_write_cstring(iter, MESSAGE_KEY_SessionId, p->session_id);
+      dict_write_cstring(iter, MESSAGE_KEY_MessageId, p->message_id);
+      break;
+    case CMD_AUDIO_PULL:
+      dict_write_cstring(iter, MESSAGE_KEY_MessageId, p->message_id);
+      dict_write_uint32(iter, MESSAGE_KEY_Offset, p->offset);
+      dict_write_uint32(iter, MESSAGE_KEY_Length, p->length);
+      break;
+    case CMD_AUDIO_STOP:
       dict_write_cstring(iter, MESSAGE_KEY_MessageId, p->message_id);
       break;
     default:
@@ -250,6 +270,18 @@ static void prv_inbox_received(DictionaryIterator *iter, void *ctx) {
     case TYPE_AUDIO:
       prv_handle_audio(iter);
       break;
+    case TYPE_AUDIO_START:
+      wspk_on_start(prv_str(iter, MESSAGE_KEY_MessageId), prv_int(iter, MESSAGE_KEY_Length, 0),
+                    prv_str(iter, MESSAGE_KEY_Detail));
+      break;
+    case TYPE_AUDIO_DATA: {
+      Tuple *data = dict_find(iter, MESSAGE_KEY_Data);
+      if (data && data->type == TUPLE_BYTE_ARRAY) {
+        wspk_on_data(prv_str(iter, MESSAGE_KEY_MessageId), prv_int(iter, MESSAGE_KEY_Offset, 0),
+                     data->value->data, data->length);
+      }
+      break;
+    }
     case TYPE_STATUS:
       prv_set_conn(prv_int(iter, MESSAGE_KEY_State, CONN_ERROR), prv_str(iter, MESSAGE_KEY_Detail));
       break;
@@ -310,6 +342,12 @@ void comm_init(CommHandlers handlers) {
   app_message_register_outbox_sent(prv_outbox_sent);
   app_message_register_outbox_failed(prv_outbox_failed);
   uint32_t inbox = TEXT_BUDGET + 512;
+#if defined(WATCH_SPEAKER)
+  // Room for watch-speaker PCM chunks: bigger chunks mean fewer round trips over Bluetooth.
+  if (inbox < SPEAKER_INBOX) {
+    inbox = SPEAKER_INBOX;
+  }
+#endif
   if (inbox > app_message_inbox_size_maximum()) {
     inbox = app_message_inbox_size_maximum();
   }
@@ -318,6 +356,7 @@ void comm_init(CommHandlers handlers) {
     outbox = app_message_outbox_size_maximum();
   }
   app_message_open(inbox, outbox);
+  s_inbox_size = inbox;
 }
 
 void comm_deinit(void) {
@@ -401,4 +440,30 @@ void comm_open_reply(const char *session_id, const char *message_id) {
   prv_copy(p.session_id, session_id, SESSION_ID_LEN);
   prv_copy(p.message_id, message_id, MESSAGE_ID_LEN);
   prv_enqueue(&p);
+}
+
+void comm_play_watch(const char *session_id, const char *message_id, uint16_t chunk) {
+  Pending p = prv_pending(CMD_PLAY_WATCH);
+  prv_copy(p.session_id, session_id, SESSION_ID_LEN);
+  prv_copy(p.message_id, message_id, MESSAGE_ID_LEN);
+  p.length = chunk;
+  prv_enqueue(&p);
+}
+
+void comm_audio_pull(const char *message_id, uint32_t offset, uint32_t length) {
+  Pending p = prv_pending(CMD_AUDIO_PULL);
+  prv_copy(p.message_id, message_id, MESSAGE_ID_LEN);
+  p.offset = offset;
+  p.length = length;
+  prv_enqueue(&p);
+}
+
+void comm_audio_stop(const char *message_id) {
+  Pending p = prv_pending(CMD_AUDIO_STOP);
+  prv_copy(p.message_id, message_id, MESSAGE_ID_LEN);
+  prv_enqueue(&p);
+}
+
+uint32_t comm_inbox_size(void) {
+  return s_inbox_size;
 }
