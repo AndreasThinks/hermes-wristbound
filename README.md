@@ -5,7 +5,8 @@ A Pebble watchapp and Android companion for using [Hermes Agent](https://github.
 **Status: first vertical slice built, not yet tested on real devices.** The watchapp builds for every Pebble platform and runs in the emulator against a scripted phone; the Android companion builds and passes its unit tests. Nothing has been run against a real Hermes, phone or watch yet; see [docs/TESTING.md](docs/TESTING.md).
 
 <p>
-  <img src="docs/screenshots/sessions.png" width="144" alt="Session list: Watch chat (unread, working), Index: groceries (Telegram), Repo cleanup (read-only)">
+  <img src="docs/screenshots/sessions.png" width="144" alt="Main menu: Recent audio (1 new), New session, then the session list">
+  <img src="docs/screenshots/recent-audio.png" width="144" alt="Recent audio: audio replies from any session, newest first, with age and a preview">
   <img src="docs/screenshots/session.png" width="144" alt="An open session, newest message first, with a Reply row on top">
   <img src="docs/screenshots/reply.png" width="144" alt="A full Hermes reply">
   <img src="docs/screenshots/actions.png" width="144" alt="Reply actions: Play, Play on phone speaker, Replay from start">
@@ -39,11 +40,12 @@ The phone talks to Hermes the way the Hermes desktop app and Hermes-Relay do: it
 
 ### On the watch
 
+- **Recent audio:** the main menu opens on a list of Hermes audio replies from every session, newest first, marked new until opened. Each opens as a reply card with Play, Reply and Open session, so incoming audio never needs hunting for.
 - **Sessions:** recent sessions with unread, Telegram, working and read-only labels; a Telegram show/hide toggle; New session; Refresh (or long-press). The last session is remembered across launches.
 - **History:** recent messages, newest first, and a full-screen view for each reply.
 - **Reply:** dictation where the watch has a microphone, or a quick reply (Yes, No, Continue, Thanks, Stop, Summarise that). Each send shows queued, working, completed, failed, uncertain or read-only.
 - **Playback** of one exact reply: Play, Play on phone speaker, Pause, Resume, Replay from start, Stop.
-- **Alerts:** an incoming-reply alert when the app is open, with Play, Open session and Dismiss.
+- **Alerts:** an incoming-reply card when the app is open, even over the same session, with Play, Reply, Open session and Dismiss.
 - Clear connection states: connected, offline with cached data, stale, not set up, sign-in failed.
 
 ### On the phone

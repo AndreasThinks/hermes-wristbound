@@ -344,6 +344,21 @@ static void prv_msg_unload(Window *window) {
   s_msg_body = NULL;
 }
 
+// Replace the card's text; updates the window in place when it is showing.
+static void prv_msg_set_body(const char *text, uint8_t flags) {
+  const char *more = (flags & MESSAGE_FLAG_TRUNCATED) ? "\n\n[Continues on phone]" : "";
+  size_t len = strlen(text) + strlen(more) + 1;
+  free(s_msg_body);
+  s_msg_body = malloc(len);
+  if (s_msg_body) {
+    snprintf(s_msg_body, len, "%s%s", text, more);
+  }
+  if (s_msg_text) {
+    text_layer_set_text(s_msg_text, s_msg_body ? s_msg_body : "");
+    prv_msg_layout();
+  }
+}
+
 static void prv_open_message(MessageMode mode, const char *session_id, const char *message_id,
                              const char *header, uint8_t role, uint8_t flags, const char *text) {
   if (s_msg_window && window_stack_contains_window(s_msg_window)) {
@@ -358,14 +373,7 @@ static void prv_open_message(MessageMode mode, const char *session_id, const cha
   s_msg_id[MESSAGE_ID_LEN - 1] = '\0';
   strncpy(s_msg_header, header, TITLE_LEN - 1);
   s_msg_header[TITLE_LEN - 1] = '\0';
-
-  const char *more = (flags & MESSAGE_FLAG_TRUNCATED) ? "\n\n[Continues on phone]" : "";
-  size_t len = strlen(text) + strlen(more) + 1;
-  free(s_msg_body);
-  s_msg_body = malloc(len);
-  if (s_msg_body) {
-    snprintf(s_msg_body, len, "%s%s", text, more);
-  }
+  prv_msg_set_body(text, flags);
 
   if (!s_msg_window) {
     s_msg_window = window_create();
@@ -497,22 +505,124 @@ static void prv_open_session_window(void) {
 }
 
 // ---------------------------------------------------------------------------
-// Main window (sessions + actions)
+// Recent audio window: audio replies from any session, newest first
 
-enum { MAIN_ACT_NEW, MAIN_ACT_TELEGRAM, MAIN_ACT_REFRESH, MAIN_ACT_COUNT };
+static Window *s_audio_window;
+static MenuLayer *s_audio_menu;
+
+// "now", "5m", "3h", "2d": how long ago, from the watch's clock (synced to the phone).
+static void prv_age(uint32_t then, char *buf, size_t len) {
+  time_t now = time(NULL);
+  int32_t ago = then && (uint32_t)now > then ? (int32_t)((uint32_t)now - then) : 0;
+  if (ago < 60) {
+    snprintf(buf, len, "now");
+  } else if (ago < 3600) {
+    snprintf(buf, len, "%dm", (int)(ago / 60));
+  } else if (ago < 86400) {
+    snprintf(buf, len, "%dh", (int)(ago / 3600));
+  } else {
+    snprintf(buf, len, "%dd", (int)(ago / 86400));
+  }
+}
+
+static uint16_t prv_audio_rows(MenuLayer *menu, uint16_t section, void *ctx) {
+  return g_model.audio_count > 0 ? g_model.audio_count : 1;
+}
+
+static int16_t prv_audio_header_h(MenuLayer *menu, uint16_t section, void *ctx) {
+  return MENU_CELL_BASIC_HEADER_HEIGHT;
+}
+
+static void prv_audio_header(GContext *ctx, const Layer *cell, uint16_t section, void *data) {
+  prv_header_draw(ctx, cell, g_model.conn == CONN_OK ? "Recent audio" : prv_conn_label());
+}
+
+static void prv_audio_draw(GContext *ctx, const Layer *cell, MenuIndex *idx, void *data) {
+  if (g_model.audio_count == 0) {
+    menu_cell_basic_draw(ctx, cell, g_model.audio_loading ? "Loading..." : "No recent audio",
+                         "Long press to refresh", NULL);
+    return;
+  }
+  const AudioItem *a = &g_model.audio[idx->row];
+  char age[8];
+  prv_age(a->time, age, sizeof(age));
+  char sub[PREVIEW_LEN + 16];
+  snprintf(sub, sizeof(sub), "%s%s %s", (a->flags & AUDIO_FLAG_NEW) ? "* " : "", age, a->preview);
+  menu_cell_basic_draw(ctx, cell, a->title[0] ? a->title : "Untitled", sub, NULL);
+}
+
+static void prv_audio_select(MenuLayer *menu, MenuIndex *idx, void *ctx) {
+  if (g_model.audio_count == 0) {
+    comm_list_audio();
+    menu_layer_reload_data(menu);
+    return;
+  }
+  AudioItem *a = &g_model.audio[idx->row];
+  a->flags &= ~AUDIO_FLAG_NEW;
+  // Show the preview at once; the phone answers with the full reply, which replaces it.
+  prv_open_message(MSG_MODE_REPLY, a->session_id, a->message_id, a->title[0] ? a->title : "Hermes",
+                   ROLE_ASSISTANT, MESSAGE_FLAG_HAS_AUDIO, a->preview);
+  comm_open_reply(a->session_id, a->message_id);
+}
+
+static void prv_audio_long_select(MenuLayer *menu, MenuIndex *idx, void *ctx) {
+  comm_list_audio();
+  menu_layer_reload_data(menu);
+}
+
+static void prv_audio_load(Window *window) {
+  Layer *root = window_get_root_layer(window);
+  s_audio_menu = menu_layer_create(layer_get_bounds(root));
+  menu_layer_set_callbacks(s_audio_menu, NULL, (MenuLayerCallbacks) {
+    .get_num_rows = prv_audio_rows,
+    .get_header_height = prv_audio_header_h,
+    .draw_header = prv_audio_header,
+    .draw_row = prv_audio_draw,
+    .select_click = prv_audio_select,
+    .select_long_click = prv_audio_long_select,
+  });
+  prv_menu_colors(s_audio_menu);
+  menu_layer_set_click_config_onto_window(s_audio_menu, window);
+  layer_add_child(root, menu_layer_get_layer(s_audio_menu));
+}
+
+static void prv_audio_unload(Window *window) {
+  menu_layer_destroy(s_audio_menu);
+  s_audio_menu = NULL;
+}
+
+static void prv_open_audio_window(void) {
+  if (!s_audio_window) {
+    s_audio_window = window_create();
+    window_set_window_handlers(s_audio_window, (WindowHandlers) {
+      .load = prv_audio_load,
+      .unload = prv_audio_unload,
+    });
+  }
+  comm_list_audio();
+  window_stack_push(s_audio_window, true);
+}
+
+// ---------------------------------------------------------------------------
+// Main window: Recent audio and New session, then sessions, then options
+
+enum { MAIN_SECTION_TOP, MAIN_SECTION_SESSIONS, MAIN_SECTION_OPTIONS, MAIN_SECTION_COUNT };
+enum { MAIN_TOP_AUDIO, MAIN_TOP_NEW, MAIN_TOP_COUNT };
+enum { MAIN_OPT_TELEGRAM, MAIN_OPT_REFRESH, MAIN_OPT_COUNT };
 
 static Window *s_main_window;
 static MenuLayer *s_main_menu;
 
 static uint16_t prv_main_sections(MenuLayer *menu, void *ctx) {
-  return 2;
+  return MAIN_SECTION_COUNT;
 }
 
 static uint16_t prv_main_rows(MenuLayer *menu, uint16_t section, void *ctx) {
-  if (section == 0) {
-    return g_model.session_count > 0 ? g_model.session_count : 1;
+  switch (section) {
+    case MAIN_SECTION_TOP: return MAIN_TOP_COUNT;
+    case MAIN_SECTION_SESSIONS: return g_model.session_count > 0 ? g_model.session_count : 1;
+    default: return MAIN_OPT_COUNT;
   }
-  return MAIN_ACT_COUNT;
 }
 
 static int16_t prv_main_header_h(MenuLayer *menu, uint16_t section, void *ctx) {
@@ -520,7 +630,11 @@ static int16_t prv_main_header_h(MenuLayer *menu, uint16_t section, void *ctx) {
 }
 
 static void prv_main_header(GContext *ctx, const Layer *cell, uint16_t section, void *data) {
-  prv_header_draw(ctx, cell, section == 0 ? prv_conn_label() : "Actions");
+  switch (section) {
+    case MAIN_SECTION_TOP: prv_header_draw(ctx, cell, prv_conn_label()); break;
+    case MAIN_SECTION_SESSIONS: prv_header_draw(ctx, cell, "Sessions"); break;
+    default: prv_header_draw(ctx, cell, "Options"); break;
+  }
 }
 
 static void prv_session_subtitle(const Session *s, char *buf, size_t len) {
@@ -531,8 +645,34 @@ static void prv_session_subtitle(const Session *s, char *buf, size_t len) {
            (s->flags & SESSION_FLAG_READ_ONLY) ? "Read-only" : "");
 }
 
+static void prv_audio_summary(char *buf, size_t len) {
+  int fresh = 0;
+  for (int i = 0; i < g_model.audio_count; i++) {
+    if (g_model.audio[i].flags & AUDIO_FLAG_NEW) {
+      fresh++;
+    }
+  }
+  if (fresh > 0) {
+    snprintf(buf, len, "* %d new", fresh);
+  } else if (g_model.audio_count > 0) {
+    snprintf(buf, len, "Latest: %s", g_model.audio[0].title);
+  } else {
+    snprintf(buf, len, "Audio from any session");
+  }
+}
+
 static void prv_main_draw(GContext *ctx, const Layer *cell, MenuIndex *idx, void *data) {
-  if (idx->section == 0) {
+  if (idx->section == MAIN_SECTION_TOP) {
+    if (idx->row == MAIN_TOP_AUDIO) {
+      char sub[TITLE_LEN + 12];
+      prv_audio_summary(sub, sizeof(sub));
+      menu_cell_basic_draw(ctx, cell, "Recent audio", sub, NULL);
+    } else {
+      menu_cell_basic_draw(ctx, cell, "New session", "Dictate or quick reply", NULL);
+    }
+    return;
+  }
+  if (idx->section == MAIN_SECTION_SESSIONS) {
     if (g_model.session_count == 0) {
       menu_cell_basic_draw(ctx, cell, g_model.sessions_loading ? "Loading..." : "No sessions",
                            "Long press to refresh", NULL);
@@ -545,21 +685,26 @@ static void prv_main_draw(GContext *ctx, const Layer *cell, MenuIndex *idx, void
     return;
   }
   switch (idx->row) {
-    case MAIN_ACT_NEW:
-      menu_cell_basic_draw(ctx, cell, "New session", NULL, NULL);
-      break;
-    case MAIN_ACT_TELEGRAM:
+    case MAIN_OPT_TELEGRAM:
       menu_cell_basic_draw(ctx, cell, "Telegram sessions",
                            g_model.include_telegram ? "Shown" : "Hidden", NULL);
       break;
-    case MAIN_ACT_REFRESH:
+    case MAIN_OPT_REFRESH:
       menu_cell_basic_draw(ctx, cell, "Refresh", NULL, NULL);
       break;
   }
 }
 
 static void prv_main_select(MenuLayer *menu, MenuIndex *idx, void *ctx) {
-  if (idx->section == 0) {
+  if (idx->section == MAIN_SECTION_TOP) {
+    if (idx->row == MAIN_TOP_AUDIO) {
+      prv_open_audio_window();
+    } else {
+      prv_open_compose(COMPOSE_NEW_SESSION);
+    }
+    return;
+  }
+  if (idx->section == MAIN_SECTION_SESSIONS) {
     if (g_model.session_count == 0) {
       comm_list_sessions();
       menu_layer_reload_data(menu);
@@ -570,17 +715,16 @@ static void prv_main_select(MenuLayer *menu, MenuIndex *idx, void *ctx) {
     return;
   }
   switch (idx->row) {
-    case MAIN_ACT_NEW:
-      prv_open_compose(COMPOSE_NEW_SESSION);
-      break;
-    case MAIN_ACT_TELEGRAM:
+    case MAIN_OPT_TELEGRAM:
       g_model.include_telegram = !g_model.include_telegram;
       model_save_prefs();
       comm_list_sessions();
+      comm_list_audio();
       menu_layer_reload_data(menu);
       break;
-    case MAIN_ACT_REFRESH:
+    case MAIN_OPT_REFRESH:
       comm_list_sessions();
+      comm_list_audio();
       menu_layer_reload_data(menu);
       break;
   }
@@ -588,6 +732,7 @@ static void prv_main_select(MenuLayer *menu, MenuIndex *idx, void *ctx) {
 
 static void prv_main_long_select(MenuLayer *menu, MenuIndex *idx, void *ctx) {
   comm_list_sessions();
+  comm_list_audio();
   menu_layer_reload_data(menu);
 }
 
@@ -621,15 +766,26 @@ void ui_sessions_changed(void) {
     return;
   }
   menu_layer_reload_data(s_main_menu);
-  // Keep the previously selected session highlighted across reconnects.
+  // While browsing sessions, keep the previously opened one highlighted across refreshes.
+  // The menu otherwise starts on Recent audio.
   if (!g_model.sessions_loading && g_model.open_session_id[0] &&
-      window_stack_get_top_window() == s_main_window) {
+      window_stack_get_top_window() == s_main_window &&
+      menu_layer_get_selected_index(s_main_menu).section == MAIN_SECTION_SESSIONS) {
     for (int i = 0; i < g_model.session_count; i++) {
       if (strcmp(g_model.sessions[i].id, g_model.open_session_id) == 0) {
-        menu_layer_set_selected_index(s_main_menu, MenuIndex(0, i), MenuRowAlignCenter, false);
+        menu_layer_set_selected_index(s_main_menu, MenuIndex(MAIN_SECTION_SESSIONS, i), MenuRowAlignCenter, false);
         break;
       }
     }
+  }
+}
+
+void ui_audio_changed(void) {
+  if (s_audio_menu) {
+    menu_layer_reload_data(s_audio_menu);
+  }
+  if (s_main_menu) {
+    menu_layer_reload_data(s_main_menu);
   }
 }
 
@@ -646,6 +802,9 @@ void ui_messages_changed(void) {
 void ui_status_changed(void) {
   if (s_main_menu) {
     menu_layer_reload_data(s_main_menu);
+  }
+  if (s_audio_menu) {
+    menu_layer_reload_data(s_audio_menu);
   }
 }
 
@@ -676,6 +835,15 @@ void ui_session_opened(void) {
 
 void ui_reply_received(const char *session_id, const char *message_id,
                        const char *title, const char *text, uint8_t flags) {
+  if (flags & MESSAGE_FLAG_REQUESTED) {
+    // The full text of a card opened from Recent audio: fill it in quietly, if still showing.
+    if (s_msg_window && window_stack_get_top_window() == s_msg_window &&
+        strcmp(message_id, s_msg_id) == 0) {
+      s_msg_flags = flags & ~MESSAGE_FLAG_REQUESTED;
+      prv_msg_set_body(text, s_msg_flags);
+    }
+    return;
+  }
   // Always show the card, even over the same session's history: it is the one place with Play,
   // Reply and Open session for this reply. The history behind it refreshes from the phone.
   vibes_short_pulse();
@@ -706,6 +874,9 @@ void ui_deinit(void) {
   }
   if (s_session_window) {
     window_destroy(s_session_window);
+  }
+  if (s_audio_window) {
+    window_destroy(s_audio_window);
   }
   window_destroy(s_main_window);
 }

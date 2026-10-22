@@ -39,7 +39,8 @@
       "State",
       "Detail",
       "Filter",
-      "Route"
+      "Route",
+      "Time"
     ],
     "resources": {
       "media": []

@@ -81,6 +81,7 @@ static void prv_pump(void) {
       }
       break;
     case CMD_LIST_SESSIONS:
+    case CMD_LIST_AUDIO:
       dict_write_uint8(iter, MESSAGE_KEY_Filter, g_model.include_telegram);
       break;
     case CMD_OPEN_SESSION:
@@ -97,6 +98,7 @@ static void prv_pump(void) {
       dict_write_uint8(iter, MESSAGE_KEY_Route, p->route);
       // fallthrough
     case CMD_REPLAY:
+    case CMD_OPEN_REPLY:
       dict_write_cstring(iter, MESSAGE_KEY_SessionId, p->session_id);
       dict_write_cstring(iter, MESSAGE_KEY_MessageId, p->message_id);
       break;
@@ -191,6 +193,31 @@ static void prv_handle_session(DictionaryIterator *iter) {
   }
 }
 
+static void prv_handle_audio(DictionaryIterator *iter) {
+  int index = prv_int(iter, MESSAGE_KEY_Index, 0);
+  int total = prv_int(iter, MESSAGE_KEY_Total, 0);
+  if (total > MAX_AUDIO) {
+    total = MAX_AUDIO;
+  }
+  if (index == 0 || total == 0) {
+    g_model.audio_count = 0;
+  }
+  if (total > 0 && index < total) {
+    AudioItem *a = &g_model.audio[index];
+    prv_copy(a->session_id, prv_str(iter, MESSAGE_KEY_SessionId), SESSION_ID_LEN);
+    prv_copy(a->message_id, prv_str(iter, MESSAGE_KEY_MessageId), MESSAGE_ID_LEN);
+    prv_copy(a->title, prv_str(iter, MESSAGE_KEY_Title), TITLE_LEN);
+    prv_copy(a->preview, prv_str(iter, MESSAGE_KEY_Text), PREVIEW_LEN);
+    a->time = prv_int(iter, MESSAGE_KEY_Time, 0);
+    a->flags = prv_int(iter, MESSAGE_KEY_Flags, 0);
+    g_model.audio_count = index + 1;
+  }
+  g_model.audio_loading = total > 0 && index + 1 < total;
+  if (s_handlers.audio_changed) {
+    s_handlers.audio_changed();
+  }
+}
+
 static void prv_handle_message(DictionaryIterator *iter) {
   if (strcmp(prv_str(iter, MESSAGE_KEY_SessionId), g_model.open_session_id) != 0) {
     return; // late page for a session the user already left
@@ -219,6 +246,9 @@ static void prv_inbox_received(DictionaryIterator *iter, void *ctx) {
       break;
     case TYPE_MESSAGE:
       prv_handle_message(iter);
+      break;
+    case TYPE_AUDIO:
+      prv_handle_audio(iter);
       break;
     case TYPE_STATUS:
       prv_set_conn(prv_int(iter, MESSAGE_KEY_State, CONN_ERROR), prv_str(iter, MESSAGE_KEY_Detail));
@@ -357,5 +387,18 @@ void comm_replay(const char *session_id, const char *message_id) {
 
 void comm_simple(Command cmd) {
   Pending p = prv_pending(cmd);
+  prv_enqueue(&p);
+}
+
+void comm_list_audio(void) {
+  g_model.audio_loading = true;
+  Pending p = prv_pending(CMD_LIST_AUDIO);
+  prv_enqueue(&p);
+}
+
+void comm_open_reply(const char *session_id, const char *message_id) {
+  Pending p = prv_pending(CMD_OPEN_REPLY);
+  prv_copy(p.session_id, session_id, SESSION_ID_LEN);
+  prv_copy(p.message_id, message_id, MESSAGE_ID_LEN);
   prv_enqueue(&p);
 }

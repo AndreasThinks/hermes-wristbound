@@ -13,6 +13,7 @@ static void prv_init(void) {
     .submit_changed = ui_submit_changed,
     .playback_changed = ui_playback_changed,
     .session_opened = ui_session_opened,
+    .audio_changed = ui_audio_changed,
     .reply_received = ui_reply_received,
   });
   g_model.sessions_loading = true;

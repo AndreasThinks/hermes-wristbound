@@ -105,6 +105,25 @@ class LocalState(context: Context) : AlertStore {
     fun loadMessages(sessionId: String): CachedMessages? =
         read(messagesFile(sessionId))?.let { runCatching { json.decodeFromString(CachedMessages.serializer(), it) }.getOrNull() }
 
+    @Serializable
+    data class CachedAudio(val fetchedAt: Long, val items: List<AudioItem>)
+
+    fun saveAudio(items: List<AudioItem>) =
+        write("audio.json", json.encodeToString(CachedAudio.serializer(), CachedAudio(now(), items)))
+
+    fun loadAudio(): List<AudioItem> =
+        read("audio.json")?.let { runCatching { json.decodeFromString(CachedAudio.serializer(), it).items }.getOrNull() }.orEmpty()
+
+    /** Audio replies the user has opened on the watch, so the inbox stops marking them new. */
+    @Synchronized
+    fun isHeard(messageId: String): Boolean = messageId in readList("heard")
+
+    @Synchronized
+    fun markHeard(messageId: String) {
+        val list = readList("heard")
+        if (messageId !in list) writeList("heard", (list + messageId).takeLast(MAX_SEEN))
+    }
+
     fun clearCache() {
         cacheDir.listFiles()?.forEach { it.delete() }
         prefs.edit().clear().apply()

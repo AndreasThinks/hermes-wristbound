@@ -17,11 +17,11 @@ import uuid
 
 from libpebble2.communication import PebbleConnection
 from libpebble2.communication.transports.websocket import WebsocketTransport
-from libpebble2.services.appmessage import AppMessageService, CString, Uint8
+from libpebble2.services.appmessage import AppMessageService, CString, Uint8, Uint32
 
 APP_UUID = uuid.UUID("094c587f-8bd7-4377-aa6b-ff55eb724b27")
 KEYS = ["Cmd", "Type", "ProtoVersion", "TextBudget", "SessionId", "Title", "Flags", "Index", "Total",
-        "MessageId", "Role", "Text", "State", "Detail", "Filter", "Route"]
+        "MessageId", "Role", "Text", "State", "Detail", "Filter", "Route", "Time"]
 K = {name: 10000 + i for i, name in enumerate(KEYS)}
 NAMES = {v: k for k, v in K.items()}
 
@@ -37,6 +37,12 @@ MESSAGES = [
     ("3", 0, "Remind me at 4."),
     ("4", 1, "Done. I'll remind you at 4:00pm to leave for the dentist."),
 ]
+# Recent audio: (session id, message id, session title, preview, minutes ago, flags: 1 new, 2 telegram)
+AUDIO = [
+    ("tg_1", "41", "Index: groceries", "Here's the list read out: oat milk, eggs, coffee...", 3, 1 | 2),
+    ("api_1", "4", "Watch chat", "Done. I'll remind you at 4:00pm to leave for the dentist.", 50, 0),
+    ("cli_1", "17", "Repo cleanup", "Summary of the cleanup: 12 branches removed, 3 kept.", 60 * 26, 0),
+]
 
 
 def main(platform):
@@ -50,7 +56,10 @@ def main(platform):
     def send(fields):
         out = {}
         for name, value in fields.items():
-            out[K[name]] = CString(value) if isinstance(value, str) else Uint8(value)
+            if isinstance(value, str):
+                out[K[name]] = CString(value)
+            else:
+                out[K[name]] = Uint32(value) if name == "Time" else Uint8(value)
         svc.send_message(APP_UUID, out)
         time.sleep(0.25)
 
@@ -65,12 +74,28 @@ def main(platform):
             send({"Type": 2, "SessionId": sid, "Index": i, "Total": len(MESSAGES), "MessageId": mid,
                   "Role": role, "Flags": 0, "Text": text})
 
+    def send_audio(include_telegram):
+        rows = [a for a in AUDIO if include_telegram or not a[5] & 2]
+        if not rows:
+            send({"Type": 8, "Index": 0, "Total": 0})
+        for i, (sid, mid, title, preview, ago, flags) in enumerate(rows):
+            send({"Type": 8, "Index": i, "Total": len(rows), "SessionId": sid, "MessageId": mid, "Title": title,
+                  "Text": preview, "Flags": flags, "Time": int(time.time()) - ago * 60})
+
     def on_message(tid, app, data):
         named = {NAMES.get(k, k): v for k, v in data.items()}
         print("watch ->", named, flush=True)
         cmd = named.get("Cmd")
         if cmd == 1 or cmd == 2:
             send_sessions(named.get("Filter", 1))
+            if cmd == 1:
+                send_audio(named.get("Filter", 1))
+        elif cmd == 11:
+            send_audio(named.get("Filter", 1))
+        elif cmd == 12:
+            item = next(a for a in AUDIO if a[1] == named["MessageId"])
+            send({"Type": 4, "SessionId": item[0], "MessageId": item[1], "Title": item[2],
+                  "Text": item[3] + " That's everything on the list for this week.", "Flags": 2 | 8})
         elif cmd == 3:
             send_messages(named["SessionId"])
         elif cmd == 4:

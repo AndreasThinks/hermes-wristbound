@@ -3,7 +3,7 @@
 // Watch <-> Android AppMessage protocol. Keep in sync with
 // android/app/src/main/java/dev/wristbound/companion/pebble/Protocol.kt and docs/PROTOCOL.md.
 
-#define PROTO_VERSION 1
+#define PROTO_VERSION 2
 
 // Watch -> phone commands (MESSAGE_KEY_Cmd)
 typedef enum {
@@ -17,6 +17,8 @@ typedef enum {
   CMD_RESUME = 8,
   CMD_REPLAY = 9,        // SessionId, MessageId
   CMD_STOP = 10,
+  CMD_LIST_AUDIO = 11,   // Filter
+  CMD_OPEN_REPLY = 12,   // SessionId, MessageId; answered with a REPLY flagged REQUESTED
 } Command;
 
 // Phone -> watch message types (MESSAGE_KEY_Type)
@@ -28,6 +30,7 @@ typedef enum {
   TYPE_PLAYBACK = 5,       // MessageId, State (PlaybackState), Detail
   TYPE_SUBMIT = 6,         // SessionId, State (SubmitState), Detail
   TYPE_SESSION_OPENED = 7, // SessionId, Title, Flags
+  TYPE_AUDIO = 8,          // Index, Total, SessionId, MessageId, Title, Text (preview), Flags, Time
 } MessageType;
 
 typedef enum {
@@ -81,6 +84,11 @@ typedef enum {
 #define MESSAGE_FLAG_TRUNCATED (1 << 0)
 #define MESSAGE_FLAG_HAS_AUDIO (1 << 1)
 #define MESSAGE_FLAG_PENDING   (1 << 2)
+#define MESSAGE_FLAG_REQUESTED (1 << 3) // a REPLY the watch asked for, not a new alert
+
+// Recent audio flags
+#define AUDIO_FLAG_NEW      (1 << 0)
+#define AUDIO_FLAG_TELEGRAM (1 << 1)
 
 // Filter: whether Telegram-origin sessions are listed
 #define FILTER_EXCLUDE_TELEGRAM 0

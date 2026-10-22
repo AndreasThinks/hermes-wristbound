@@ -22,6 +22,12 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -65,9 +71,10 @@ class Wristbound private constructor(context: Context) {
     private val activeTurns = ConcurrentHashMap<String, Job>()
     private val sessionsById = ConcurrentHashMap<String, HermesSession>()
     /** Full reply text and Hermes audio paths by message id, for playback. Bounded. */
-    private val replies = object : LinkedHashMap<String, Reply>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Reply>?) = size > 64
+    private val replies = object : LinkedHashMap<String, Reply>(128, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Reply>?) = size > 128
     }
+    private val inboxMutex = Mutex()
     private val pollMutex = Mutex()
     private var monitor: Job? = null
     private val alerts = ReplyAlerts(state, ::alertPolicy) { deliverAlert(it) }
@@ -156,6 +163,8 @@ class Wristbound private constructor(context: Context) {
                     watch.send(WatchCodec.status(Protocol.Conn.ERROR, "Update watch or phone app"))
                 }
                 pushSessions()
+                // The saved list only: the watch asks for a refresh when Recent audio is opened.
+                sendAudioPages(state.loadAudio())
                 pendingReply?.let { (sid, mid) ->
                     pendingReply = null
                     sendReplyToWatch(sid, mid)
@@ -173,6 +182,14 @@ class Wristbound private constructor(context: Context) {
             WatchCommand.Pause -> playback.pause()
             WatchCommand.Resume -> playback.resume(lastAllowSpeaker)
             WatchCommand.Stop -> playback.stop()
+            is WatchCommand.ListAudio -> {
+                settings.includeTelegram = cmd.includeTelegram
+                pushAudio(refresh = true)
+            }
+            is WatchCommand.OpenReply -> {
+                state.markHeard(cmd.messageId)
+                sendReplyToWatch(cmd.sessionId, cmd.messageId, requested = true)
+            }
         }
     }
 
@@ -238,6 +255,7 @@ class Wristbound private constructor(context: Context) {
             if (api == null) throw IOException("not configured")
             val raw = api.recentMessages(sessionId, 40)
             rememberReplies(raw)
+            noteAudio(sessionsById[sessionId], raw)
             SessionMapper.watchMessages(raw, settings.toolActivity).also { state.saveMessages(sessionId, title, it) }
         } catch (e: HermesProtocolException) {
             Log.w(TAG, "unreadable history", e)
@@ -254,6 +272,70 @@ class Wristbound private constructor(context: Context) {
 
     private fun rememberReplies(raw: List<HermesMessage>) = synchronized(replies) {
         SessionMapper.replies(raw).forEach { r -> replies[r.id] = Reply(Text.forWatch(r.message.text), r.audio) }
+    }
+
+    // -- recent audio ---------------------------------------------------------------------------
+
+    /**
+     * Send the Recent audio list. The saved list goes first, so the watch shows something at
+     * once; with [refresh] it is then rebuilt from Hermes (see [AudioInbox] for the window).
+     */
+    suspend fun pushAudio(refresh: Boolean) {
+        sendAudioPages(state.loadAudio())
+        if (!refresh) return
+        val api = api()
+        if (api == null) {
+            watch.send(WatchCodec.status(Protocol.Conn.NOT_CONFIGURED, "Set up phone app"))
+            return
+        }
+        try {
+            val sessions = fetchSessions(api)
+                .filter { it.archived != true && it.hidden != true && it.is_internal_child != true }
+                .sortedByDescending { it.activity }
+                .take(AudioInbox.SESSIONS)
+            val found = coroutineScope {
+                val limit = Semaphore(4)
+                sessions.map { s ->
+                    async {
+                        limit.withPermit {
+                            val raw = runCatching { api.recentMessages(s.id, AudioInbox.MESSAGES) }
+                                .onFailure { if (it is CancellationException) throw it }
+                                .getOrNull() ?: return@withPermit emptyList()
+                            rememberReplies(raw)
+                            AudioInbox.collect(s, raw)
+                        }
+                    }
+                }.awaitAll().flatten()
+            }
+            val items = inboxMutex.withLock { AudioInbox.merge(state.loadAudio(), found).also { state.saveAudio(it) } }
+            sendAudioPages(items)
+        } catch (e: IOException) {
+            watch.send(WatchCodec.status(Protocol.Conn.OFFLINE, "Offline - cached"))
+        }
+    }
+
+    /** Add audio replies found in one session's transcript; refresh the watch if any were new. */
+    private suspend fun noteAudio(session: HermesSession?, raw: List<HermesMessage>) {
+        if (session == null) return
+        val found = AudioInbox.collect(session, raw)
+        if (found.isEmpty()) return
+        val changed = inboxMutex.withLock {
+            val before = state.loadAudio()
+            val after = AudioInbox.merge(before, found)
+            (after != before).also { if (it) state.saveAudio(after) }
+        }
+        if (changed && watchOpen) sendAudioPages(state.loadAudio())
+    }
+
+    private suspend fun sendAudioPages(items: List<AudioItem>) {
+        val visible = AudioInbox.visible(items, settings.includeTelegram, Protocol.MAX_AUDIO)
+        val seen = state.lastSeen()
+        val pages = if (visible.isEmpty()) listOf(WatchCodec.audioPage(0, 0, null, false))
+        else visible.mapIndexed { i, item ->
+            val isNew = !state.isHeard(item.messageId) && item.timestamp > (seen[item.sessionId] ?: 0.0) + 0.001
+            WatchCodec.audioPage(i, visible.size, item, isNew)
+        }
+        watch.sendAll(pages)
     }
 
     // -- submissions ----------------------------------------------------------------------------
@@ -355,6 +437,7 @@ class Wristbound private constructor(context: Context) {
         val raw = runCatching { api.recentMessages(sessionId, 20) }.getOrNull() ?: return
         rememberReplies(raw)
         val session = sessionsById[sessionId] ?: HermesSession(sessionId, title = title)
+        noteAudio(session, raw)
         alerts.turnFinished(session, raw)
     }
 
@@ -395,12 +478,15 @@ class Wristbound private constructor(context: Context) {
     }
 
     /** Show one reply as a card on the watch. True when the watch acknowledged it. */
-    private suspend fun sendReplyToWatch(sessionId: String, messageId: String, fallbackText: String? = null, hasAudio: Boolean? = null): Boolean {
+    private suspend fun sendReplyToWatch(
+        sessionId: String, messageId: String, fallbackText: String? = null, hasAudio: Boolean? = null, requested: Boolean = false,
+    ): Boolean {
         val reply = replyFor(sessionId, messageId)
         val text = reply?.text ?: fallbackText?.let(Text::forWatch) ?: return false
         val audio = hasAudio ?: reply?.audio?.isNotEmpty() ?: false
         val title = sessionsById[sessionId]?.displayTitle ?: "Hermes"
-        val flags = if (audio) Protocol.MessageFlag.HAS_AUDIO else 0
+        var flags = if (audio) Protocol.MessageFlag.HAS_AUDIO else 0
+        if (requested) flags = flags or Protocol.MessageFlag.REQUESTED
         return watch.send(WatchCodec.reply(sessionId, title, WatchMessage(messageId, Protocol.Role.ASSISTANT, flags, text), textBudget))
     }
 
@@ -465,7 +551,10 @@ class Wristbound private constructor(context: Context) {
             return@withLock
         }
         val moved = alerts.poll(sessions, busy = { activeTurns.containsKey(it) }) { id ->
-            api.recentMessages(id, 20).also { rememberReplies(it) }
+            api.recentMessages(id, 20).also {
+                rememberReplies(it)
+                noteAudio(sessionsById[id], it)
+            }
         }
         if (moved.isNotEmpty() && watchOpen) {
             pushSessions()
@@ -512,7 +601,8 @@ class Wristbound private constructor(context: Context) {
 
     private suspend fun replyFor(sessionId: String, messageId: String): Reply? {
         synchronized(replies) { replies[messageId] }?.let { return it }
-        val raw = runCatching { api()?.recentMessages(sessionId, 40) }.getOrNull() ?: return null
+        // Wide enough for anything the Recent audio list can show.
+        val raw = runCatching { api()?.recentMessages(sessionId, AudioInbox.MESSAGES) }.getOrNull() ?: return null
         rememberReplies(raw)
         return synchronized(replies) { replies[messageId] }
     }
