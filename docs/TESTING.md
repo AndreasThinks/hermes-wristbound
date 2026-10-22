@@ -24,6 +24,27 @@ pebble emu-button click select --emulator basalt
 pebble screenshot --emulator basalt
 ```
 
+The watch asks for sessions when it launches, so if the fake phone connects after the app has started, long-press Select (Refresh) to load them:
+
+```bash
+pebble emu-button push select --emulator basalt; sleep 1; pebble emu-button release select --emulator basalt
+```
+
+### Screenshots
+
+The screenshots in the README and `docs/screenshots/` come from this harness on basalt, with `pebble screenshot --no-open --emulator basalt docs/screenshots/<name>.png`:
+
+| File | Buttons from the session list |
+|------|-------------------------------|
+| `sessions.png` | (after Refresh) |
+| `session.png` | Select |
+| `reply.png` | Select, Select |
+| `actions.png` | Select, Select, Select |
+| `compose.png` | Select, Select, Select, Back, Back, Up (to Reply), Select |
+| `working.png`, `received.png` | from compose: Down, Select; shot after 0.5 s and after 4 s |
+
+On a headless Linux machine, start a virtual display first (`Xvfb :99 &` and `export DISPLAY=:99`), since QEMU opens an SDL window. In containers without IPv6, pypkjs fails to listen (`Address family not supported`) and `pebble install` reports `Connection refused`; binding its WebSocket server to `0.0.0.0` instead of `""` in `pypkjs/runner/websocket.py` works around it.
+
 Checked on basalt and aplite this way: session list with unread, Telegram and read-only labels; the Telegram toggle; opening a session (newest first); reading a reply; the action menu; Play without headphones reporting "No headphones"; Play on phone speaker; a quick reply moving through working to completed.
 
 ## Not yet tested: real devices

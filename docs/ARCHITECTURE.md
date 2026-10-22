@@ -1,6 +1,37 @@
-# Proposed architecture
+# Architecture
 
-Everything here is a design proposal until verified against supported APIs and real devices.
+The first vertical slice is built (see [MILESTONES.md](MILESTONES.md)). The section below describes what the code does today; the rest of this document is the design it follows. None of it has been verified on real devices yet.
+
+## As built
+
+```text
+Pebble watchapp (watch/src/c)
+  ui.c       session list, session view, reply view, compose menu, action menu, alert
+  comm.c     AppMessage send/receive, outbox queue
+  model.c    on-screen state only: sessions, messages, submit and playback status
+       |
+       |  AppMessage, protocol v1 (PROTOCOL.md)
+       v
+Android companion (android/app/src/main/java/dev/wristbound/companion)
+  pebble/    WatchLink + WristboundListenerService (PebbleKit Android 2), WatchCodec, text fitting
+  core/      TurnRunner (submit, recover, at-most-once), SessionMapper, Alerts (one policy),
+             Settings, LocalState (bounded cache and polling checkpoints)
+  hermes/    DashboardAuth (PKCE, password, browser, session token), DashboardClient, Gateway (WebSocket JSON-RPC)
+  playback/  PlaybackController (Hermes audio, Hermes voice, phone voice; pause on disconnect)
+  sync/      SyncService (background polling), BootReceiver
+  notify/    Notifier and ActionReceiver (phone notification mirrored to the Pebble)
+  ui/        MainActivity (connection and settings)
+       |
+       |  HTTPS + WebSocket over Tailscale (HERMES_API.md)
+       v
+Hermes dashboard (port 9119, published with tailscale serve)
+```
+
+A watch reply runs like this: the watch sends a submit command with the session id and text; the companion resumes that session on the gateway socket, submits the prompt queued behind any running turn, and waits for the completion event; status updates (queued, working, completed, failed, uncertain) go back to the watch as they happen, and the answer arrives as a new message. If the socket drops after the prompt was sent, the companion never resends: it looks for the answer in the transcript, re-attaches to the turn, or reports *uncertain*.
+
+Replies that start elsewhere (Telegram, Ringbearer, the desktop) are found by polling the session list while background sync is on. Every delivery path goes through the same alert policy, which decides whether a reply alerts, alerts as audio, or updates silently, and records a checkpoint so it alerts once.
+
+The decisions behind these choices, and why the Hermes API server is not used, are in [HERMES_API.md](HERMES_API.md).
 
 ## Component responsibilities
 
@@ -60,14 +91,20 @@ Protect cached conversations and media, redact diagnostics, and make notificatio
 
 ## Open questions
 
+Answered in code, still to confirm on devices:
+
+- Hermes API coverage and authentication: the dashboard and gateway socket cover sessions, history, submission, events and audio ([HERMES_API.md](HERMES_API.md)).
+- Continuing Telegram-origin sessions: `session.resume` on the gateway, as the desktop app does; replies can be turned off per user setting.
+- Filters versus alerts: the Telegram filter changes visibility only; Telegram text and audio alerts are separate settings.
+- Audio labelling: replies with Hermes audio are labelled as audio in the alert; text replies can be read again in Hermes' voice.
+
+Still open:
+
 - Target watch model, firmware, Android release and Pebble companion release.
-- Actual Hermes session/event/media API coverage and supported authentication.
-- Safe cross-client continuation of Telegram-origin sessions.
-- Background reception and media-service startup while the phone is locked.
-- Dictation and optional on-watch playback support.
-- Exact relationship between filters, subscriptions and unread state.
-- Whether incoming audio already has usable text or needs a separate display label.
-- License choice, SDK versions and packaging/distribution.
+- Background reception and media-service startup while the phone is locked, under Doze.
+- Push delivery for replies from other surfaces instead of polling.
+- Optional on-watch playback.
+- License choice and packaging/distribution.
 
 ## References
 
