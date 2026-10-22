@@ -1,0 +1,28 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+local.properties
+
+# IDE and build products
+.idea/
+.gradle/
+.kotlin/
+**/build/
+*.apk
+*.aab
+*.pbw
+node_modules/
+.venv/
+__pycache__/
+
+# Runtime/private artifacts
+recordings/
+media-cache/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+.DS_Store
