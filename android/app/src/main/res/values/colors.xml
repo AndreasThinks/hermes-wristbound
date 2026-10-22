@@ -1,6 +1,10 @@
 <resources>
-    <!-- Matches the watchapp's cobalt highlight. -->
-    <color name="wristbound_blue">#0055AA</color>
-    <color name="wristbound_blue_light">#3D8BDB</color>
-    <color name="card_stroke">#330055AA</color>
+    <!-- Phosphor, as on the watch: black glass, green to act, violet while Hermes speaks. -->
+    <color name="phosphor_glass">#FF000000</color>
+    <color name="phosphor_signal">#FF00FFAA</color>
+    <color name="phosphor_voice">#FFAA55FF</color>
+    <color name="phosphor_text">#FFEDEDF2</color>
+    <color name="phosphor_note">#FFC4C4CC</color>
+    <color name="phosphor_meta">#FF9A9AA6</color>
+    <color name="phosphor_rule">#FF2E2E36</color>
 </resources>
