@@ -37,14 +37,38 @@ Credentials are stored encrypted with an Android Keystore key and never sent to 
 | Start a session | `session.create {source: "webui"}` | Returns the runtime `session_id` and the `stored_session_id`. The stored row is written on the first prompt. |
 | Send a turn | `prompt.submit {session_id, text, queued: true}` | Acks `{"status":"streaming"}`, or `"queued"` if a turn is already running there. `queued: true` waits behind that turn; without it Hermes' default is to redirect the running turn. |
 | Turn events | `message.start`, `message.delta`, `tool.start`, `tool.complete`, `message.complete` | `message.complete` carries `text` and `status` (`complete`, `error`, `interrupted`). Approval, clarification and secret prompts arrive as server requests (`approval.request`, ...). The watch says "Needs an answer on desktop"; it cannot answer them. |
-| Hermes-generated audio | `GET /api/files/stream?path=<server path>` | Streams the file a `MEDIA:<path>` tag names (the text-to-speech tool writes them under `~/.hermes/cache/audio/`). Audio extensions only. The desktop and Hermes-Relay use the same managed-files routes. |
-| Speak a reply in Hermes' voice | `POST /api/audio/speak {text}` | Runs the `tts:` provider chain from Hermes' config and returns a `data:` URL. The desktop's read-aloud uses it. |
+| Hermes-generated audio | `GET /api/files/stream?path=<server path>` | Streams the file a `MEDIA:<path>` tag names (the text-to-speech tool writes them under `~/.hermes/cache/audio/`). Audio extensions only. The desktop and Hermes-Relay use the same managed-files routes. See the audio contract below. |
+| Read a reply aloud in Hermes' voice | `POST /api/audio/speak {text}` | Runs the `tts:` provider chain from Hermes' config on the text and returns a `data:` URL. This is **new** speech, not any audio Hermes sent earlier; the desktop's read-aloud uses it the same way. |
+
+## Audio contract
+
+What a client can and cannot get, from the Hermes source:
+
+- **Text-to-speech tool output** (the agent calls `text_to_speech`). The tool writes the file under `~/.hermes/cache/audio/` and returns `MEDIA:<path>` in its tool result, which is stored in the transcript; the agent usually repeats the tag in its reply. This is the original audio, and the companion fetches it with `/api/files/stream`.
+- **Automatic voice replies** (Telegram voice mode, or auto-TTS after a voice note). `gateway/run_voice.py` `_send_voice_reply` synthesises to a temp file, hands it to the platform adapter, then deletes it in a `finally` block. No transcript row or `MEDIA:` tag records it. **No client can retrieve this audio**, the desktop included; it exists only in the Telegram chat. Getting it would need a Hermes change that keeps the file and records a `MEDIA:` reference for it.
+- **`/api/audio/speak`** synthesises the reply text again. It is labelled on the watch as "Hermes voice, read again", and never counts as a reply "having audio" for alerts.
+
+How the companion decides which audio belongs to which reply (`SessionMapper.replies`):
+
+- A turn runs from a user row to the next. Audio counts only from assistant rows and `text_to_speech` results in that turn, not from user rows or other tools.
+- Incoming user recordings (a Telegram voice note, a Ringbearer capture) are cached in the same `cache/audio` folder as generated speech, and a user row names them as `[The user sent a voice message: <path>]` or a transcription note. Any file a user row names is excluded, even if the agent later refers to it, and so is any file named as Hermes names inbound media (`audio_<12 hex>`).
+- A media-only assistant row joins the answer before it in the same turn, which is how audio that arrives after the text is matched.
+
+## Alerts
+
+One policy decides every reply alert, whether the reply came from a turn sent on the watch, from background polling, or from recovery after a dropped socket. Settings: replies on or off, scope (all eligible sessions or only the open one), Telegram text alerts (off by default), and Telegram audio alerts (on by default: a Telegram reply that carries Hermes audio alerts even with Telegram text alerts off). Each reply alerts at most once. Its text and its audio are recorded separately, so audio that turns up later either alerts once (when the text did not alert) or silently refreshes the alert already shown. Nothing plays until Play is pressed.
+
+Polling keeps a checkpoint per session, persisted on the phone. The first poll ever only records a baseline. A session's checkpoint moves only after its history was fetched and processed; a failed fetch, or a turn still running from the watch, leaves it for the next poll. After a restart, polling picks up from the saved checkpoints.
+
+## Telegram replies
+
+"Allow replies to Telegram sessions" (on by default) can be turned off to keep Telegram sessions read-only from the watch. They stay listed, readable and playable. The phone refuses a send into a Telegram session (or into a session it cannot identify) with "Reply in Telegram", and the watch does not open the reply screen there. Nothing changes on the Hermes side.
 
 ## Turn safety
 
 A turn is submitted at most once. The companion marks the prompt as sent as soon as `prompt.submit` is handed to the socket. If the socket fails after that, it never resends; it recovers by looking:
 
-1. The transcript: if the user message is there with a final answer after it, that is the reply.
+1. The transcript, bounded to this prompt. Before submitting, the companion records the session's newest row id. Only a user row written after that boundary counts (the row id Hermes acks as `user_row_id`, when the ack arrived, or else the first later user row with the same text), and the answer must sit between that row and the next user row. An older identical prompt, or a later turn's answer, never counts. If the boundary could not be read, the transcript is not used as evidence.
 2. Re-attaching: a new socket and `session.resume` join the live session if the turn is still running (Hermes keeps a detached turn running while it is producing output), and the rest of the turn streams in.
 3. Otherwise the watch shows *uncertain* with a short reason.
 

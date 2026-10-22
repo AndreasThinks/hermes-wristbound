@@ -125,6 +125,8 @@ class MainActivity : AppCompatActivity() {
 
         column.addView(heading("Watch"))
         column.addView(switch("Show Telegram sessions", s.includeTelegram) { s.includeTelegram = it })
+        column.addView(switch("Allow replies to Telegram sessions", s.allowTelegramReplies) { s.allowTelegramReplies = it })
+        column.addView(note("Off keeps Telegram sessions read-only on the watch: you can still read and play replies, and answer in Telegram."))
         column.addView(switch("Show tool activity on watch", s.toolActivity != ToolActivity.HIDDEN) {
             s.toolActivity = if (it) ToolActivity.SILENT else ToolActivity.HIDDEN
         })
@@ -140,7 +142,8 @@ class MainActivity : AppCompatActivity() {
         column.addView(heading("Notifications"))
         column.addView(switch("Notify final replies", s.notifyReplies) { s.notifyReplies = it })
         column.addView(switch("Also notify for Telegram sessions", s.notifyTelegram) { s.notifyTelegram = it })
-        column.addView(note("Off by default so Telegram and Wristbound do not both alert for the same reply. Hidden Telegram sessions never alert unless this is on."))
+        column.addView(switch("Notify Telegram replies with Hermes audio", s.notifyTelegramAudio) { s.notifyTelegramAudio = it })
+        column.addView(note("Telegram text alerts are off by default so Telegram and Wristbound do not both alert for the same reply. A Telegram reply that carries audio Hermes generated can still alert once here, so you can play it from the watch. Nothing plays until you press Play."))
         column.addView(switch("Notify when Hermes uses a tool", s.toolActivity == ToolActivity.NOTIFY) {
             s.toolActivity = if (it) ToolActivity.NOTIFY else ToolActivity.SILENT
         })

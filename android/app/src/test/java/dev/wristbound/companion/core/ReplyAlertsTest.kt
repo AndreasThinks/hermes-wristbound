@@ -1,0 +1,230 @@
+package dev.wristbound.companion.core
+
+import dev.wristbound.companion.hermes.HermesHttp
+import dev.wristbound.companion.hermes.HermesMessage
+import dev.wristbound.companion.hermes.HermesSession
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.io.IOException
+
+class ReplyAlertsTest {
+    /** What [LocalState] persists, in memory; survives a "restart" by being reused. */
+    private class MemoryStore : AlertStore {
+        val keys = mutableSetOf<String>()
+        override fun markAlerted(key: String) = keys.add(key)
+        override fun isAlerted(key: String) = key in keys
+        override var pollCursors: PollCursors? = null
+    }
+
+    private fun msg(json: String) = HermesHttp.json.decodeFromString(HermesMessage.serializer(), json)
+
+    private var policy = AlertPolicy(
+        replies = true, scope = NotifyScope.ALL_ELIGIBLE, telegramText = false, telegramAudio = true, openSessionId = null,
+    )
+    private val store = MemoryStore()
+    private val alerts = mutableListOf<ReplyAlert>()
+    private fun dispatcher(s: AlertStore = store) = ReplyAlerts(s, { policy }) { alerts += it }
+
+    /** The server: session rows and each session's transcript, both editable between polls. */
+    private val sessions = mutableMapOf<String, HermesSession>()
+    private val transcripts = mutableMapOf<String, List<HermesMessage>>()
+    private var fetchFailures = 0
+    private var busy = emptySet<String>()
+
+    private fun session(id: String, source: String, activity: Double, vararg rows: HermesMessage) {
+        sessions[id] = HermesSession(id, source = source, title = id, last_active = activity)
+        transcripts[id] = rows.toList()
+    }
+
+    private fun append(id: String, activity: Double, vararg rows: HermesMessage) {
+        sessions[id] = sessions.getValue(id).copy(last_active = activity)
+        transcripts[id] = transcripts.getValue(id) + rows
+    }
+
+    private suspend fun poll(d: ReplyAlerts = dispatcher()) = d.poll(sessions.values.toList(), { it in busy }) { id ->
+        if (fetchFailures > 0) { fetchFailures--; throw IOException("history unavailable") }
+        transcripts.getValue(id)
+    }
+
+    private val voiceNote = """{"role":"user","content":"[The user sent a voice message: /home/h/.hermes/cache/audio/audio_ab12.ogg (duration: 0:07)]"}"""
+    private fun user(id: Int, ts: Double, text: String = "hi") = msg("""{"id":$id,"role":"user","content":"$text","timestamp":$ts}""")
+    private fun answer(id: Int, ts: Double, text: String = "Done.") = msg("""{"id":$id,"role":"assistant","content":"$text","timestamp":$ts}""")
+    private fun speech(id: Int, ts: Double) = msg(
+        """{"id":$id,"role":"tool","tool_name":"text_to_speech","timestamp":$ts,"content":"{\"success\": true, \"media_tag\": \"MEDIA:/home/h/.hermes/cache/audio/tts_$id.ogg\"}"}""",
+    )
+
+    @Test
+    fun ringbearerCaptureInTelegramAlertsOnceForItsAudioReply() = runTest {
+        // Telegram visible, Telegram text alerts off, audio alerts on (the defaults).
+        session("tg", "telegram", 10.0, user(1, 9.0), answer(2, 10.0))
+        poll() // baseline
+        append(
+            "tg", 20.0,
+            msg(voiceNote.replace("{", """{"id":3,"timestamp":15.0,""")),
+            speech(4, 18.0),
+            answer(5, 20.0, "Here is the weather."),
+        )
+        poll()
+        assertEquals(1, alerts.size)
+        val alert = alerts.single()
+        assertEquals("5", alert.messageId)
+        assertTrue(alert.hasAudio)
+        assertFalse(alert.silent)
+        // Polling again, or a later bump in activity with no new reply, never repeats it.
+        poll()
+        sessions["tg"] = sessions.getValue("tg").copy(last_active = 25.0)
+        poll()
+        assertEquals(1, alerts.size)
+    }
+
+    @Test
+    fun telegramTextOnlyRepliesDoNotAlertWithTextAlertsOff() = runTest {
+        session("tg", "telegram", 10.0)
+        poll()
+        append("tg", 20.0, msg(voiceNote.replace("{", """{"id":3,"timestamp":15.0,""")), answer(4, 20.0))
+        poll()
+        assertEquals(emptyList<ReplyAlert>(), alerts)
+    }
+
+    @Test
+    fun telegramAudioArrivingAfterTheTextAlertsOnceWhenItArrives() = runTest {
+        session("tg", "telegram", 10.0)
+        poll()
+        append("tg", 20.0, user(3, 15.0), answer(4, 20.0))
+        poll()
+        assertEquals(emptyList<ReplyAlert>(), alerts)
+        append("tg", 30.0, msg("""{"id":5,"role":"assistant","timestamp":30.0,"content":"MEDIA:/home/h/.hermes/cache/audio/tts_5.ogg"}"""))
+        poll()
+        assertEquals(listOf("4"), alerts.map { it.messageId })
+        assertTrue(alerts.single().hasAudio && !alerts.single().silent)
+        poll()
+        assertEquals(1, alerts.size)
+    }
+
+    @Test
+    fun aReplyThatAlreadyAlertedIsOnlyRefreshedWhenItsAudioArrives() = runTest {
+        session("cli", "cli", 10.0)
+        poll()
+        append("cli", 20.0, user(3, 15.0), answer(4, 20.0))
+        poll()
+        append("cli", 30.0, msg("""{"id":5,"role":"assistant","timestamp":30.0,"content":"MEDIA:/home/h/.hermes/cache/audio/tts_5.ogg"}"""))
+        poll()
+        assertEquals(listOf(false to false, true to true), alerts.map { it.hasAudio to it.silent })
+        assertEquals(listOf("4", "4"), alerts.map { it.messageId })
+    }
+
+    @Test
+    fun bothTelegramTogglesOffNeverAlertEvenForAudio() = runTest {
+        policy = policy.copy(telegramText = false, telegramAudio = false)
+        session("tg", "telegram", 10.0)
+        poll()
+        append("tg", 20.0, user(3, 15.0), speech(4, 18.0), answer(5, 20.0))
+        poll()
+        append("tg", 30.0, msg("""{"id":6,"role":"assistant","timestamp":30.0,"content":"MEDIA:/home/h/.hermes/cache/audio/tts_6.ogg"}"""))
+        poll()
+        assertEquals(emptyList<ReplyAlert>(), alerts)
+        // Turning audio alerts on later does not replay replies already decided.
+        policy = policy.copy(telegramAudio = true)
+        sessions["tg"] = sessions.getValue("tg").copy(last_active = 31.0)
+        poll()
+        assertEquals(emptyList<ReplyAlert>(), alerts)
+    }
+
+    @Test
+    fun aFailedFetchKeepsTheCheckpointSoTheNextPollAlerts() = runTest {
+        session("cli", "cli", 10.0)
+        poll()
+        append("cli", 20.0, user(3, 15.0), answer(4, 20.0))
+        fetchFailures = 1
+        poll()
+        assertEquals(emptyList<ReplyAlert>(), alerts)
+        assertEquals(10.0, store.pollCursors!!.sessions["cli"]!!, 0.0)
+        // Same activity as the failed poll; it must still be processed.
+        poll()
+        assertEquals(listOf("4"), alerts.map { it.messageId })
+        assertEquals(20.0, store.pollCursors!!.sessions["cli"]!!, 0.0)
+        poll()
+        assertEquals(1, alerts.size)
+    }
+
+    @Test
+    fun aRunningTurnIsSkippedWithoutAdvancing() = runTest {
+        session("cli", "cli", 10.0)
+        poll()
+        append("cli", 20.0, user(3, 15.0), answer(4, 20.0))
+        busy = setOf("cli")
+        assertEquals(setOf("cli"), poll())
+        assertEquals(emptyList<ReplyAlert>(), alerts)
+        busy = emptySet()
+        poll()
+        assertEquals(listOf("4"), alerts.map { it.messageId })
+    }
+
+    @Test
+    fun restartCatchesUpFromPersistedCheckpoints() = runTest {
+        session("cli", "cli", 10.0, user(1, 9.0), answer(2, 10.0))
+        poll()
+        // The process dies; replies arrive; a new process with the same store polls.
+        append("cli", 20.0, user(3, 15.0), answer(4, 20.0))
+        session("new", "cli", 25.0, user(5, 24.0), answer(6, 25.0))
+        poll(dispatcher())
+        assertEquals(listOf("4", "6"), alerts.map { it.messageId }.sorted())
+        // Old history from before the baseline never alerts.
+        assertFalse("2" in alerts.map { it.messageId })
+    }
+
+    @Test
+    fun theFirstPollOnlyTakesABaseline() = runTest {
+        session("cli", "cli", 10.0, user(1, 9.0), answer(2, 10.0))
+        assertEquals(emptySet<String>(), poll())
+        assertEquals(emptyList<ReplyAlert>(), alerts)
+        assertEquals(10.0, store.pollCursors!!.since, 0.0)
+    }
+
+    @Test
+    fun repliesOlderThanTheCheckpointDoNotAlert() = runTest {
+        session("cli", "cli", 10.0, user(1, 5.0), answer(2, 6.0, "Older"))
+        poll()
+        // A different client alerted nothing for #2; it is still old history.
+        append("cli", 20.0, user(3, 15.0), answer(4, 20.0))
+        poll()
+        assertEquals(listOf("4"), alerts.map { it.messageId })
+    }
+
+    @Test
+    fun aDirectCompletionUsesTheSamePolicy() = runTest {
+        val tg = HermesSession("tg", source = "telegram", title = "tg")
+        val d = dispatcher()
+        d.turnFinished(tg, listOf(user(1, 1.0), answer(2, 2.0)))
+        assertEquals(emptyList<ReplyAlert>(), alerts) // Telegram text alerts are off
+        d.turnFinished(tg, listOf(user(3, 3.0), speech(4, 4.0), answer(5, 5.0)))
+        assertEquals(listOf("5"), alerts.map { it.messageId })
+
+        policy = policy.copy(scope = NotifyScope.OPEN_SESSION, openSessionId = "elsewhere")
+        d.turnFinished(HermesSession("cli", source = "cli"), listOf(user(6, 6.0), answer(7, 7.0)))
+        assertEquals(1, alerts.size)
+        policy = policy.copy(replies = false, scope = NotifyScope.ALL_ELIGIBLE)
+        d.turnFinished(HermesSession("cli", source = "cli"), listOf(user(8, 8.0), answer(9, 9.0)))
+        assertEquals(1, alerts.size)
+    }
+
+    @Test
+    fun aDirectCompletionAndALaterPollAlertOnce() = runTest {
+        session("cli", "cli", 10.0)
+        poll()
+        append("cli", 20.0, user(3, 15.0), answer(4, 20.0))
+        dispatcher().turnFinished(sessions.getValue("cli"), transcripts.getValue("cli"))
+        // The socket dropped and came back; polling sees the same reply.
+        poll()
+        assertEquals(listOf("4"), alerts.map { it.messageId })
+    }
+
+    @Test
+    fun aDirectCompletionDoesNotAlertEarlierTurns() = runTest {
+        dispatcher().turnFinished(HermesSession("cli", source = "cli"), listOf(user(1, 1.0), answer(2, 2.0), user(3, 3.0)))
+        assertEquals(emptyList<ReplyAlert>(), alerts)
+    }
+}

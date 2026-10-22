@@ -65,30 +65,96 @@ class SessionMapperTest {
             msg("""{"id":5,"role":"user","content":"Thanks"}"""),
             msg("""{"id":6,"role":"assistant","content":"Any time."}"""),
         )
-        assertEquals(listOf("/home/h/.hermes/cache/audio/tts_1.ogg"), SessionMapper.audioFor(raw, 3))
-        assertEquals(emptyList<String>(), SessionMapper.audioFor(raw, 5))
+        val replies = SessionMapper.replies(raw).associateBy { it.id }
+        assertEquals(listOf("/home/h/.hermes/cache/audio/tts_1.ogg"), replies.getValue("4").audio)
+        assertEquals(emptyList<String>(), replies.getValue("6").audio)
         val shown = SessionMapper.watchMessages(raw, ToolActivity.HIDDEN).associateBy { it.id }
         assertEquals(Protocol.MessageFlag.HAS_AUDIO, shown.getValue("4").flags)
         assertEquals(0, shown.getValue("6").flags)
     }
 
     @Test
-    fun newRepliesSkipsNotifiedAndToolSteps() {
+    fun theUsersOwnRecordingIsNeverTheAssistantsAudio() {
+        // A Ringbearer or Telegram voice note lands in the same cache/audio folder as speech.
         val raw = listOf(
-            msg("""{"id":4,"role":"assistant","content":"First"}"""),
-            msg("""{"id":5,"role":"assistant","content":"","tool_calls":[{"id":"c"}]}"""),
-            msg("""{"id":6,"role":"assistant","content":"Second"}"""),
+            msg("""{"id":1,"role":"user","content":"[The user sent a voice message: /home/h/.hermes/cache/audio/audio_ab12.ogg (duration: 0:07)]"}"""),
+            msg("""{"id":2,"role":"assistant","content":"","tool_calls":[{"id":"c"}]}"""),
+            msg("""{"id":3,"role":"tool","tool_name":"transcribe","content":"MEDIA:/home/h/.hermes/cache/audio/audio_ab12.ogg -> hello"}"""),
+            msg("""{"id":4,"role":"assistant","content":"You said hello. MEDIA:/workspace/cache/audio/audio_ab12.ogg"}"""),
         )
-        assertEquals(listOf("6"), SessionMapper.newReplies(raw, setOf("4")).map { it.stableId })
+        val reply = SessionMapper.replies(raw).single()
+        assertEquals("4", reply.id)
+        assertFalse(reply.hasAudio)
     }
 
     @Test
-    fun telegramNotificationsAreOptIn() {
-        val tg = sessions[0]
-        assertFalse(SessionMapper.shouldNotify(tg, NotifyScope.ALL_ELIGIBLE, null, notifyTelegram = false))
-        assertTrue(SessionMapper.shouldNotify(tg, NotifyScope.ALL_ELIGIBLE, null, notifyTelegram = true))
-        val api = sessions[1]
-        assertTrue(SessionMapper.shouldNotify(api, NotifyScope.OPEN_SESSION, "api", false))
-        assertFalse(SessionMapper.shouldNotify(api, NotifyScope.OPEN_SESSION, "other", false))
+    fun anInboundRecordingIsExcludedEvenWhenItsUserRowIsOutOfView() {
+        val raw = listOf(
+            msg("""{"id":7,"role":"assistant","content":"Saved your note. MEDIA:/home/h/.hermes/cache/audio/audio_0123456789ab.ogg"}"""),
+        )
+        assertFalse(SessionMapper.replies(raw).single().hasAudio)
+    }
+
+    @Test
+    fun onlyTextToSpeechToolOutputCountsAsGeneratedAudio() {
+        val raw = listOf(
+            msg("""{"id":1,"role":"user","content":"Find the podcast"}"""),
+            msg("""{"id":2,"role":"tool","tool_name":"terminal","content":"saved MEDIA:/tmp/download.mp3"}"""),
+            msg("""{"id":3,"role":"assistant","content":"Found it."}"""),
+        )
+        assertFalse(SessionMapper.replies(raw).single().hasAudio)
+    }
+
+    @Test
+    fun audioThatArrivesAfterTheTextJoinsThatReply() {
+        val text = listOf(
+            msg("""{"id":1,"role":"user","content":"Read me the summary"}"""),
+            msg("""{"id":2,"role":"assistant","content":"Here is the summary."}"""),
+        )
+        assertFalse(SessionMapper.replies(text).single().hasAudio)
+        val later = text + msg("""{"id":3,"role":"assistant","content":"[[audio_as_voice]]\nMEDIA:/home/h/.hermes/cache/audio/tts_9.ogg"}""")
+        val reply = SessionMapper.replies(later).single()
+        assertEquals("2", reply.id)
+        assertEquals(listOf("/home/h/.hermes/cache/audio/tts_9.ogg"), reply.audio)
+        // The media-only row is not a second message on the watch.
+        assertEquals(listOf("1", "2"), SessionMapper.watchMessages(later, ToolActivity.HIDDEN).map { it.id })
+    }
+
+    @Test
+    fun aMediaOnlyAnswerIsStillAReply() {
+        val raw = listOf(
+            msg("""{"id":1,"role":"user","content":"Say it"}"""),
+            msg("""{"id":2,"role":"assistant","content":"MEDIA:/home/h/.hermes/cache/audio/tts_2.mp3"}"""),
+        )
+        val reply = SessionMapper.replies(raw).single()
+        assertEquals("2", reply.id)
+        assertTrue(reply.hasAudio)
+    }
+
+    @Test
+    fun latestTurnRepliesIgnoreEarlierTurns() {
+        val raw = listOf(
+            msg("""{"id":1,"role":"user","content":"a"}"""),
+            msg("""{"id":2,"role":"assistant","content":"old"}"""),
+            msg("""{"id":3,"role":"user","content":"b"}"""),
+            msg("""{"id":4,"role":"assistant","content":"new"}"""),
+        )
+        assertEquals(listOf("4"), SessionMapper.latestTurnReplies(raw).map { it.id })
+        assertEquals(emptyList<String>(), SessionMapper.latestTurnReplies(raw.take(3)).map { it.id })
+    }
+
+    @Test
+    fun telegramReadOnlyModeKeepsOtherSessionsWritable() {
+        val shown = SessionMapper.visibleSessions(
+            sessions, true, emptyMap(), emptySet(), emptySet(), telegramReplies = false,
+        ).associateBy { it.id }
+        assertEquals(Protocol.SessionFlag.TELEGRAM or Protocol.SessionFlag.READ_ONLY, shown.getValue("tg").flags)
+        assertEquals(0, shown.getValue("api").flags)
+
+        assertEquals("Reply in Telegram", SessionMapper.replyRefusal(sessions[0], telegramReplies = false))
+        assertEquals(null, SessionMapper.replyRefusal(sessions[1], telegramReplies = false))
+        assertEquals("Refresh sessions first", SessionMapper.replyRefusal(null, telegramReplies = false))
+        assertEquals(null, SessionMapper.replyRefusal(sessions[0], telegramReplies = true))
+        assertEquals(null, SessionMapper.replyRefusal(null, telegramReplies = true))
     }
 }

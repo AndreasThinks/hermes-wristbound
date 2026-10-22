@@ -46,8 +46,16 @@ class Notifier(private val context: Context) {
         )
     }
 
-    fun reply(sessionId: String, messageId: String, title: String, text: String, private: Boolean) {
-        val body = if (private) "New reply" else text
+    /**
+     * One reply, keyed by its message id. [silent] refreshes a reply that already alerted (its
+     * audio arrived later) without alerting again. Nothing plays until an action is pressed.
+     */
+    fun reply(sessionId: String, messageId: String, title: String, text: String, private: Boolean, hasAudio: Boolean, silent: Boolean) {
+        val body = when {
+            private -> if (hasAudio) "New audio reply" else "New reply"
+            hasAudio && !text.contains("[audio]") -> "[audio] $text"
+            else -> text
+        }
         val n = NotificationCompat.Builder(context, CH_REPLIES)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
@@ -56,6 +64,7 @@ class Notifier(private val context: Context) {
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setVisibility(if (private) NotificationCompat.VISIBILITY_PRIVATE else NotificationCompat.VISIBILITY_PUBLIC)
             .setOnlyAlertOnce(true)
+            .setSilent(silent)
             .setAutoCancel(true)
             .setContentIntent(openApp())
             .addAction(0, "Play", action(ActionReceiver.ACTION_PLAY, sessionId, messageId))

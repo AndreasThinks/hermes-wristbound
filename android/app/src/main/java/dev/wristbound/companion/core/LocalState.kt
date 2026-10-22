@@ -9,11 +9,11 @@ import kotlinx.serialization.builtins.serializer
 import java.io.File
 
 /**
- * Small, bounded on-device state: unread baselines, notified message ids (for deduplication),
- * sessions Hermes refused to continue, and a cache of what the watch last showed.
- * Everything lives in app-private storage, excluded from backups.
+ * Small, bounded on-device state: unread baselines, alerted reply ids and polling checkpoints
+ * (for deduplication and catch-up), sessions Hermes refused to continue, and a cache of what the
+ * watch last showed. Everything lives in app-private storage, excluded from backups.
  */
-class LocalState(context: Context) {
+class LocalState(context: Context) : AlertStore {
     private val prefs = context.getSharedPreferences("state", Context.MODE_PRIVATE)
     private val cacheDir = File(context.noBackupFilesDir, "cache").apply { mkdirs() }
     private val json = HermesHttp.json
@@ -38,16 +38,26 @@ class LocalState(context: Context) {
     }
 
     @Synchronized
-    fun notified(): Set<String> = readList("notified").toSet()
+    override fun isAlerted(key: String): Boolean = key in readList("notified")
 
-    /** Record a notified message id. Returns false if it was already recorded (a duplicate). */
     @Synchronized
-    fun markNotified(messageId: String): Boolean {
+    override fun markAlerted(key: String): Boolean {
         val list = readList("notified")
-        if (messageId in list) return false
-        writeList("notified", (list + messageId).takeLast(MAX_NOTIFIED))
+        if (key in list) return false
+        // commit(): an alert must be on disk before it can be shown, or a restart repeats it.
+        prefs.edit().putString("notified", json.encodeToString(ListSerializer(String.serializer()), (list + key).takeLast(MAX_NOTIFIED))).commit()
         return true
     }
+
+    override var pollCursors: PollCursors?
+        @Synchronized get() = prefs.getString("poll_cursors", null)?.let {
+            runCatching { json.decodeFromString(PollCursors.serializer(), it) }.getOrNull()
+        }
+        @Synchronized set(v) {
+            val edit = prefs.edit()
+            if (v == null) edit.remove("poll_cursors") else edit.putString("poll_cursors", json.encodeToString(PollCursors.serializer(), v))
+            edit.commit()
+        }
 
     @Synchronized
     fun readOnly(): Set<String> = readList("read_only").toSet()
@@ -117,7 +127,7 @@ class LocalState(context: Context) {
 
     private companion object {
         const val MAX_SEEN = 200
-        const val MAX_NOTIFIED = 500
+        const val MAX_NOTIFIED = 1000
         const val MAX_CACHED_SESSIONS = 10
     }
 }

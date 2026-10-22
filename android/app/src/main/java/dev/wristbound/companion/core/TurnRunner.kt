@@ -63,6 +63,10 @@ class TurnRunner(
 
         var stored = sessionId
         var submitted = false
+        // Evidence for recovery: the transcript's last row before this prompt, so only rows
+        // written after it can count, and the row id Hermes acks for this prompt, if it does.
+        var boundary: Long? = null
+        var userRow: Long? = null
         try {
             val runtime = if (sessionId != null) {
                 val resumed = gateway.call(
@@ -70,11 +74,14 @@ class TurnRunner(
                     params("session_id" to sessionId, "omit_messages" to true, "inline_images" to false),
                     RESUME_TIMEOUT_MS,
                 )
-                resumed.string("session_id") ?: return TurnOutcome.Failed("Hermes did not open the session")
+                val runtime = resumed.string("session_id") ?: return TurnOutcome.Failed("Hermes did not open the session")
+                boundary = lastRowId(sessionId)
+                runtime
             } else {
                 val created = gateway.call("session.create", params("source" to NEW_SESSION_SOURCE))
                 stored = created.string("stored_session_id")
                 stored?.let { onCreated(it) }
+                boundary = 0L // a new session: every row in it is from this turn
                 created.string("session_id") ?: return TurnOutcome.Failed("Hermes did not create a session")
             }
             // queued=true: if a turn is already running here, wait behind it instead of
@@ -85,6 +92,7 @@ class TurnRunner(
                 SUBMIT_TIMEOUT_MS,
                 onSent = { submitted = true },
             )
+            userRow = ack.string("user_row_id")?.toLongOrNull()
             val queued = ack.string("status") == "queued"
             onProgress(Protocol.Submit.WORKING, if (queued) "Queued behind a running turn" else "Hermes is working")
             return listen(gateway, runtime, awaitStart = queued, onProgress, onTool)
@@ -100,7 +108,14 @@ class TurnRunner(
             gateway.close()
         }
         val target = stored ?: return TurnOutcome.Uncertain("Connection lost; not resent")
-        return recover(target, text, onProgress, onTool)
+        return recover(target, Asked(text, boundary, userRow), onProgress, onTool)
+    }
+
+    /** The newest transcript row id in [sessionId], or null if it cannot be read. */
+    private suspend fun lastRowId(sessionId: String): Long? = try {
+        api.recentMessages(sessionId, 1).mapNotNull { it.rowId }.maxOrNull() ?: 0L
+    } catch (e: IOException) {
+        null
     }
 
     /**
@@ -155,14 +170,14 @@ class TurnRunner(
      */
     private suspend fun recover(
         sessionId: String,
-        text: String,
+        asked: Asked,
         onProgress: suspend (Protocol.Submit, String) -> Unit,
         onTool: suspend (String) -> Unit,
     ): TurnOutcome {
         onProgress(Protocol.Submit.WORKING, "Reconnecting to Hermes")
         var waited = 0L
         while (waited <= recoverTimeoutMs) {
-            when (val seen = answerInTranscript(sessionId, text)) {
+            when (val seen = answerInTranscript(sessionId, asked)) {
                 is Seen.Answered -> return TurnOutcome.Completed(seen.text)
                 else -> Unit
             }
@@ -180,7 +195,7 @@ class TurnRunner(
                             ?: TurnOutcome.Uncertain("Still running; check later")
                     }
                     // Idle: the turn already ended. The transcript is the authority.
-                    return when (val seen = answerInTranscript(sessionId, text)) {
+                    return when (val seen = answerInTranscript(sessionId, asked)) {
                         is Seen.Answered -> TurnOutcome.Completed(seen.text)
                         Seen.Asked -> TurnOutcome.Uncertain("Hermes got it but did not answer")
                         Seen.Unknown -> TurnOutcome.Uncertain("Not sure Hermes got it; not resent")
@@ -199,21 +214,38 @@ class TurnRunner(
         return TurnOutcome.Uncertain("Lost Hermes mid-turn; not resent")
     }
 
+    /** What was sent, and where in the transcript its row can be. */
+    private data class Asked(val text: String, val boundary: Long?, val userRow: Long?)
+
     private sealed class Seen {
         data class Answered(val text: String) : Seen()
         data object Asked : Seen()
         data object Unknown : Seen()
     }
 
-    private suspend fun answerInTranscript(sessionId: String, text: String): Seen {
+    /**
+     * This prompt's answer, if the transcript shows it. The prompt's row is the one Hermes
+     * acked, or else the first user row with the same text written after the pre-submit
+     * boundary; an older identical prompt never matches. The answer is the final assistant row
+     * between that row and the next user row, so a later turn's answer never matches either.
+     * Without a boundary the transcript proves nothing, and only re-attaching can.
+     */
+    private suspend fun answerInTranscript(sessionId: String, asked: Asked): Seen {
+        if (asked.userRow == null && asked.boundary == null) return Seen.Unknown
         val messages = try {
-            api.recentMessages(sessionId, 12)
+            api.recentMessages(sessionId, TRANSCRIPT_WINDOW)
         } catch (e: IOException) {
             return Seen.Unknown
         }
-        val asked = messages.indexOfLast { it.role == "user" && it.text.trim() == text.trim() }
-        if (asked < 0) return Seen.Unknown
-        val answer = messages.drop(asked + 1).lastOrNull { it.isFinalAssistantText } ?: return Seen.Asked
+        val row = messages.indexOfFirst { m ->
+            m.role == "user" && when (asked.userRow) {
+                null -> (m.rowId ?: return@indexOfFirst false) > asked.boundary!! && m.text.trim() == asked.text.trim()
+                else -> m.rowId == asked.userRow
+            }
+        }
+        if (row < 0) return Seen.Unknown
+        val next = (row + 1 until messages.size).firstOrNull { messages[it].role == "user" } ?: messages.size
+        val answer = messages.subList(row + 1, next).lastOrNull { it.isFinalAssistantText } ?: return Seen.Asked
         return Seen.Answered(answer.text)
     }
 
@@ -231,6 +263,7 @@ class TurnRunner(
         const val SUBMIT_TIMEOUT_MS = 120_000L
         /** Existing rich-chat source label, as Hermes-Relay uses; Hermes has no Wristbound-specific one. */
         const val NEW_SESSION_SOURCE = "webui"
+        const val TRANSCRIPT_WINDOW = 40
         val WAITS_FOR_ANSWER = setOf("approval.request", "clarify.request", "sudo.request", "secret.request")
 
         fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull

@@ -56,7 +56,7 @@ class Wristbound private constructor(context: Context) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Reply>?) = size > 64
     }
     private val pollMutex = Mutex()
-    private var lastPolled: MutableMap<String, Double>? = null
+    private val alerts = ReplyAlerts(state, ::alertPolicy) { deliverAlert(it) }
     private val audioDir = File(app.cacheDir, "audio").apply { mkdirs() }
 
     private data class Reply(val text: String, val audio: List<String>)
@@ -132,6 +132,7 @@ class Wristbound private constructor(context: Context) {
         try {
             val visible = SessionMapper.visibleSessions(
                 fetchSessions(api), settings.includeTelegram, state.lastSeen(), state.readOnly(), activeTurns.keys,
+                settings.allowTelegramReplies,
             )
             state.saveSessions(visible)
             watch.send(WatchCodec.status(Protocol.Conn.OK, ""))
@@ -176,9 +177,7 @@ class Wristbound private constructor(context: Context) {
     }
 
     private fun rememberReplies(raw: List<HermesMessage>) = synchronized(replies) {
-        raw.forEachIndexed { i, m ->
-            if (m.isFinalAssistantText) replies[m.stableId] = Reply(Text.forWatch(m.text), SessionMapper.audioFor(raw, i))
-        }
+        SessionMapper.replies(raw).forEach { r -> replies[r.id] = Reply(Text.forWatch(r.message.text), r.audio) }
     }
 
     // -- submissions ----------------------------------------------------------------------------
@@ -203,7 +202,15 @@ class Wristbound private constructor(context: Context) {
     }
 
     private suspend fun submit(sessionId: String, text: String) {
-        if (api() == null) return submitState(sessionId, Protocol.Submit.FAILED, "Set up phone app")
+        val api = api() ?: return submitState(sessionId, Protocol.Submit.FAILED, "Set up phone app")
+        if (!settings.allowTelegramReplies) {
+            // Enforced here, not only on the watch: an unknown session is looked up first and
+            // refused if it still cannot be checked.
+            if (sessionsById[sessionId] == null) runCatching { fetchSessions(api) }
+            SessionMapper.replyRefusal(sessionsById[sessionId], telegramReplies = false)?.let {
+                return submitState(sessionId, Protocol.Submit.READ_ONLY, it)
+            }
+        }
         if (isDuplicate(sessionId, text)) return
         if (activeTurns.containsKey(sessionId)) {
             return submitState(sessionId, Protocol.Submit.FAILED, "Hermes still working here")
@@ -267,24 +274,31 @@ class Wristbound private constructor(context: Context) {
         if (watchOpen) watch.send(WatchCodec.submit(sessionId, s, detail))
     }
 
+    /** The reply to a turn sent from the watch, through the same alert policy as polling. */
     private suspend fun deliverLatestReply(api: HermesApi, sessionId: String, title: String) {
-        val raw = runCatching { api.recentMessages(sessionId, 10) }.getOrNull() ?: return
+        val raw = runCatching { api.recentMessages(sessionId, 20) }.getOrNull() ?: return
         rememberReplies(raw)
-        val latest = raw.lastOrNull { it.isFinalAssistantText } ?: return
-        // Only the reply to this turn: it must come after the last user message.
-        val lastUser = raw.indexOfLast { it.role == "user" }
-        if (raw.indexOf(latest) < lastUser) return
-        deliverReply(sessionId, title, latest)
+        val session = sessionsById[sessionId] ?: HermesSession(sessionId, title = title)
+        alerts.turnFinished(session, raw)
     }
 
-    /** Deliver one reply exactly once: to the open watchapp, otherwise as a phone notification. */
-    private suspend fun deliverReply(sessionId: String, title: String, message: HermesMessage) {
-        if (!state.markNotified(message.stableId)) return
+    private fun alertPolicy() = AlertPolicy(
+        replies = settings.notifyReplies,
+        scope = settings.notifyScope,
+        telegramText = settings.notifyTelegram,
+        telegramAudio = settings.notifyTelegramAudio,
+        openSessionId = state.openSessionId,
+    )
+
+    /** Show one decided alert: on the open watchapp, otherwise as a phone notification. */
+    private suspend fun deliverAlert(alert: ReplyAlert) {
+        val sessionId = alert.sessionId
         sessionsById[sessionId]?.let { if (state.openSessionId == sessionId && watchOpen) state.markSeen(sessionId, it.activity) }
         if (watchOpen) {
-            sendReplyToWatch(sessionId, message.stableId)
-        } else if (settings.notifyReplies) {
-            notifier.reply(sessionId, message.stableId, title, Text.forWatch(message.text), settings.privatePreviews)
+            // The watch's message list picks up late audio on its next refresh.
+            if (!alert.silent) sendReplyToWatch(sessionId, alert.messageId)
+        } else {
+            notifier.reply(sessionId, alert.messageId, alert.title, Text.forWatch(alert.text), settings.privatePreviews, alert.hasAudio, alert.silent)
         }
     }
 
@@ -311,8 +325,7 @@ class Wristbound private constructor(context: Context) {
 
     /**
      * One background check for replies that arrived through other paths (Telegram, Ringbearer,
-     * desktop) or after the phone lost a stream. The first poll only records a baseline, so
-     * enabling sync does not replay old history as notifications.
+     * desktop) or after the phone lost a stream. See [ReplyAlerts.poll] for the checkpoints.
      */
     suspend fun pollOnce() = pollMutex.withLock {
         val api = api() ?: return@withLock
@@ -322,36 +335,12 @@ class Wristbound private constructor(context: Context) {
             Log.d(TAG, "poll failed: ${e.message}")
             return@withLock
         }
-        val previous = lastPolled
-        val current = sessions.associate { it.id to it.activity }.toMutableMap()
-        lastPolled = current
-        if (previous == null) return@withLock
-
-        var changed = false
-        for (session in sessions) {
-            val before = previous[session.id]
-            if (before != null && session.activity <= before + 0.001) continue
-            changed = true
-            if (activeTurns.containsKey(session.id)) continue // that turn delivers its own reply
-            val eligible = SessionMapper.shouldNotify(session, settings.notifyScope, state.openSessionId, settings.notifyTelegram)
-            val raw = runCatching { api.recentMessages(session.id, 6) }.getOrNull() ?: continue
-            rememberReplies(raw)
-            val fresh = SessionMapper.newReplies(raw, state.notified())
-                .filter { (it.timestamp ?: Double.MAX_VALUE) > (before ?: 0.0) }
-            val latest = fresh.lastOrNull()
-            if (!eligible) {
-                // Visible but not alerting: mark as handled so it never alerts later.
-                fresh.forEach { state.markNotified(it.stableId) }
-                continue
-            }
-            if (latest != null) {
-                fresh.dropLast(1).forEach { state.markNotified(it.stableId) }
-                deliverReply(session.id, session.displayTitle, latest)
-            }
+        val moved = alerts.poll(sessions, busy = { activeTurns.containsKey(it) }) { id ->
+            api.recentMessages(id, 20).also { rememberReplies(it) }
         }
-        if (changed && watchOpen) {
+        if (moved.isNotEmpty() && watchOpen) {
             pushSessions()
-            state.openSessionId?.let { open -> if (previous[open] != current[open]) pushMessages(open) }
+            state.openSessionId?.let { open -> if (open in moved) pushMessages(open) }
         }
     }
 
@@ -359,7 +348,8 @@ class Wristbound private constructor(context: Context) {
 
     /**
      * Play one exact reply. In order: audio Hermes attached to it (its text-to-speech tool
-     * output), then the reply spoken in Hermes' own configured voice, then the phone's voice.
+     * output), then the reply text spoken again in Hermes' configured voice (newly generated,
+     * not the voice note Telegram may have received), then the phone's voice.
      */
     suspend fun play(sessionId: String, messageId: String, allowSpeaker: Boolean) {
         lastAllowSpeaker = allowSpeaker
@@ -384,7 +374,7 @@ class Wristbound private constructor(context: Context) {
             onPlaybackState(messageId, Protocol.Playback.IDLE, "Getting Hermes voice")
             clip = runCatching { api.speak(Text.forSpeech(reply.text), messageId, audioDir) }
                 .onFailure { Log.d(TAG, "Hermes voice failed: ${it.message}") }.getOrNull()
-                ?.let { it to "Playing Hermes voice" }
+                ?.let { it to "Hermes voice, read again" }
         }
         pruneAudio()
         if (clip != null) playback.playFile(messageId, clip.first.file, allowSpeaker, clip.second)

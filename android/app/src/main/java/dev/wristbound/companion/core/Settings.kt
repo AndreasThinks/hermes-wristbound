@@ -52,9 +52,20 @@ class Settings(context: Context) : CredentialStore {
         get() = prefs.getBoolean("notify_replies", true)
         set(v) = prefs.edit().putBoolean("notify_replies", v).apply()
 
+    /** Text alerts for Telegram sessions. Off by default: Telegram already notifies the phone. */
     var notifyTelegram: Boolean
         get() = prefs.getBoolean("notify_telegram", false)
         set(v) = prefs.edit().putBoolean("notify_telegram", v).apply()
+
+    /** Alert for Telegram replies that carry Hermes audio, even with [notifyTelegram] off. */
+    var notifyTelegramAudio: Boolean
+        get() = prefs.getBoolean("notify_telegram_audio", true)
+        set(v) = prefs.edit().putBoolean("notify_telegram_audio", v).apply()
+
+    /** Allow sending from the watch into Telegram sessions. Off keeps them read and play only. */
+    var allowTelegramReplies: Boolean
+        get() = prefs.getBoolean("allow_telegram_replies", true)
+        set(v) = prefs.edit().putBoolean("allow_telegram_replies", v).apply()
 
     var notifyScope: NotifyScope
         get() = enumValueOrDefault(prefs.getString("notify_scope", null), NotifyScope.ALL_ELIGIBLE)

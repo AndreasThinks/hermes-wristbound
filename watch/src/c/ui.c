@@ -398,6 +398,12 @@ static void prv_session_draw(GContext *ctx, const Layer *cell, MenuIndex *idx, v
 
 static void prv_session_select(MenuLayer *menu, MenuIndex *idx, void *ctx) {
   if (idx->row == 0) {
+    // Read-only sessions (refused by Hermes, or Telegram with replies turned off on the phone)
+    // stay readable and playable; the phone also refuses the send.
+    if (g_model.open_session_flags & SESSION_FLAG_READ_ONLY) {
+      vibes_short_pulse();
+      return;
+    }
     prv_open_compose(COMPOSE_REPLY);
     return;
   }

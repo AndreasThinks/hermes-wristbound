@@ -49,10 +49,14 @@ class TurnRunnerTest {
         val gateways: MutableList<FakeGateway>,
         var transcript: List<HermesMessage> = emptyList(),
         val openFailure: Exception? = null,
+        var historyFailure: Exception? = null,
     ) : HermesApi {
         val opened = mutableListOf<FakeGateway>()
         override suspend fun listSessions(limit: Int) = emptyList<HermesSession>()
-        override suspend fun recentMessages(sessionId: String, limit: Int) = transcript
+        override suspend fun recentMessages(sessionId: String, limit: Int): List<HermesMessage> {
+            historyFailure?.let { throw it }
+            return transcript.takeLast(limit)
+        }
         override suspend fun openGateway(): Gateway {
             openFailure?.let { throw it }
             return gateways.removeAt(0).also { opened += it }
@@ -194,17 +198,96 @@ class TurnRunnerTest {
         assertEquals(TurnOutcome.Failed("Connection lost; not sent"), run(api))
     }
 
+    private val history = listOf(
+        msg("""{"id":1,"role":"user","content":"hi"}"""),
+        msg("""{"id":2,"role":"assistant","content":"OLD answer"}"""),
+    )
+
+    /** A session holding [history]; once the prompt is in, the socket drops and [then] is written. */
+    private fun dropAfterSubmit(then: List<HermesMessage>, vararg more: FakeGateway): FakeApi {
+        val api = FakeApi(mutableListOf(), transcript = history)
+        api.gateways += scripted { emit("message.start"); api.transcript = history + then; drop() }
+        api.gateways += more
+        return api
+    }
+
+    private val idle get() = FakeGateway { _, _, _ -> obj("session_id" to "rt2", "running" to false) }
+
     @Test
     fun dropAfterSubmitReadsTheAnswerFromTheTranscriptWithoutResending() = runTest {
-        val api = FakeApi(
-            mutableListOf(scripted { emit("message.start"); drop() }),
-            transcript = listOf(
-                msg("""{"id":10,"role":"user","content":"hi"}"""),
-                msg("""{"id":11,"role":"assistant","content":"Late answer"}"""),
-            ),
-        )
+        val api = dropAfterSubmit(listOf(
+            msg("""{"id":10,"role":"user","content":"hi"}"""),
+            msg("""{"id":11,"role":"assistant","content":"Late answer"}"""),
+        ))
         assertEquals(TurnOutcome.Completed("Late answer"), run(api))
         assertEquals(1, api.submissions)
+    }
+
+    @Test
+    fun anOlderIdenticalPromptAndItsAnswerAreNotThisTurn() = runTest {
+        // The reviewer's case: [user("hi"), assistant("OLD answer")] already there, nothing new.
+        val api = dropAfterSubmit(emptyList(), idle)
+        assertEquals(TurnOutcome.Uncertain("Not sure Hermes got it; not resent"), run(api))
+        assertEquals(1, api.submissions)
+    }
+
+    @Test
+    fun theAnswerIsBoundToThisPromptNotALaterTurn() = runTest {
+        val api = dropAfterSubmit(listOf(
+            msg("""{"id":3,"role":"user","content":"hi"}"""),
+            msg("""{"id":4,"role":"assistant","content":"Ours"}"""),
+            msg("""{"id":5,"role":"user","content":"something else, from Telegram"}"""),
+            msg("""{"id":6,"role":"assistant","content":"Theirs"}"""),
+        ))
+        assertEquals(TurnOutcome.Completed("Ours"), run(api))
+    }
+
+    @Test
+    fun aPromptWithNoAnswerYetIsNotAnsweredByALaterTurn() = runTest {
+        val api = dropAfterSubmit(listOf(
+            msg("""{"id":3,"role":"user","content":"hi"}"""),
+            msg("""{"id":4,"role":"user","content":"next"}"""),
+            msg("""{"id":5,"role":"assistant","content":"Answer to next"}"""),
+        ), idle)
+        assertEquals(TurnOutcome.Uncertain("Hermes got it but did not answer"), run(api))
+    }
+
+    @Test
+    fun theAckedRowIdIdentifiesThePrompt() = runTest {
+        val api = FakeApi(mutableListOf(), transcript = history)
+        api.gateways += FakeGateway { method, _, onSent ->
+            when (method) {
+                "session.resume" -> obj("session_id" to "rt1")
+                else -> {
+                    onSent()
+                    // Hermes rewrote the stored text (e.g. a prefix), so only the id can match it.
+                    api.transcript = history + listOf(
+                        msg("""{"id":7,"role":"user","content":"[note] hi"}"""),
+                        msg("""{"id":8,"role":"assistant","content":"By id"}"""),
+                    )
+                    emit("message.start")
+                    drop()
+                    obj("status" to "streaming", "user_row_id" to "7")
+                }
+            }
+        }
+        assertEquals(TurnOutcome.Completed("By id"), run(api))
+    }
+
+    @Test
+    fun withoutABoundaryTheTranscriptIsNotTrusted() = runTest {
+        val api = dropAfterSubmit(listOf(
+            msg("""{"id":3,"role":"user","content":"hi"}"""),
+            msg("""{"id":4,"role":"assistant","content":"Looks like ours"}"""),
+        ), idle)
+        // History could not be read before the prompt went out.
+        api.historyFailure = java.io.IOException("history unavailable")
+        val gateway = api.gateways[0]
+        api.gateways[0] = FakeGateway { method, params, onSent ->
+            if (method == "prompt.submit") api.historyFailure = null
+            gateway.answer(this, method, params, onSent)
+        }
+        assertEquals(TurnOutcome.Uncertain("Not sure Hermes got it; not resent"), run(api))
     }
 
     @Test
@@ -221,7 +304,6 @@ class TurnRunnerTest {
 
     @Test
     fun dropAfterSubmitWithNoTraceIsUncertainAndNotResent() = runTest {
-        val idle = FakeGateway { _, _, _ -> obj("session_id" to "rt2", "running" to false) }
         val api = FakeApi(mutableListOf(scripted { drop() }, idle))
         assertEquals(TurnOutcome.Uncertain("Not sure Hermes got it; not resent"), run(api))
         assertEquals(1, api.submissions)

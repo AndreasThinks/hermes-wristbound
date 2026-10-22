@@ -60,6 +60,10 @@ data class HermesMessage(
         get() = (id as? JsonPrimitive)?.contentOrNull
             ?: "${session_id.orEmpty()}:${timestamp ?: 0.0}:${role.orEmpty()}"
 
+    /** The integer transcript row id, when Hermes gives one. Later rows have larger ids. */
+    val rowId: Long?
+        get() = (id as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
+
     /** Plain text of the content, whether it is a string or a list of multimodal parts. */
     val text: String
         get() = when (val c = content) {
@@ -89,8 +93,14 @@ data class HermesMessage(
         get() = role == "assistant" && !hasToolCalls && text.isNotBlank()
 
     /**
-     * Server paths of audio Hermes produced, from `MEDIA:<path>` tags. The text-to-speech tool
-     * returns one in its tool result, and the agent usually repeats it in the reply.
+     * Server paths named by `MEDIA:<path>` audio tags in this row. The text-to-speech tool
+     * returns one in its tool result, and the agent usually repeats it in the reply. Whether a
+     * path is Hermes' answer or the user's own recording is decided per turn by
+     * `SessionMapper.replies`, not here.
+     *
+     * Automatic voice replies (Telegram voice mode, auto-TTS after a voice note) never appear:
+     * Hermes sends them straight to the platform and deletes the file, without a transcript
+     * row. See docs/HERMES_API.md.
      */
     val audioRefs: List<String>
         get() = AUDIO_TAG.findAll(text.replace("\\/", "/"))
