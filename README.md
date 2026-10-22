@@ -4,7 +4,7 @@ A Pebble watchapp and Android companion for using [Hermes Agent](https://github.
 
 **Status: experimental public release, v0.4.0.** Installed and exercised on a Pixel 9a with Hermes 0.22.2 and a Pebble Time 2. The user has confirmed session browsing and phone/headphone audio playback. Watch-speaker sound, forced phone-speaker routing with headphones attached, and hardware Quick Launch still need dedicated acceptance checks. All seven watch targets build, but that is not a claim of real-device testing on every model. See [installation and setup](docs/INSTALL.md) and [the test plan](docs/TESTING.md).
 
-**Android companion required.** The watch app is not standalone and does not include a hosted Hermes service. Download the matched APK/PBW from [GitHub Releases](https://github.com/AndreasThinks/hermes-wristbound/releases/latest). The companion is currently a sideloaded debug APK, not a Play Store app.
+**Android companion required.** The watch app is not standalone and does not include a hosted Hermes service. Install the watch app from the [Pebble Store](https://apps.repebble.com/22984baa50dd4b68ba9a0945), then download the matched Android APK from [GitHub Releases](https://github.com/AndreasThinks/hermes-wristbound/releases/latest) and follow the [setup guide](docs/INSTALL.md). The companion is currently a sideloaded debug APK, not a Play Store app.
 
 <p>
   <img src="docs/screenshots/splash.png" width="144" alt="Launch screen: the Hermes girl in green and violet pixels over the Wristbound name">
