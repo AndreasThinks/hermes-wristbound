@@ -1,0 +1,61 @@
+{
+  "name": "hermes-wristbound",
+  "author": "Hermes Wristbound",
+  "version": "0.1.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "Wristbound",
+    "uuid": "094c587f-8bd7-4377-aa6b-ff55eb724b27",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": [
+      "aplite",
+      "basalt",
+      "chalk",
+      "diorite",
+      "emery",
+      "flint",
+      "gabbro"
+    ],
+    "watchapp": {
+      "watchface": false
+    },
+    "capabilities": [],
+    "messageKeys": [
+      "Cmd",
+      "Type",
+      "ProtoVersion",
+      "TextBudget",
+      "SessionId",
+      "Title",
+      "Flags",
+      "Index",
+      "Total",
+      "MessageId",
+      "Role",
+      "Text",
+      "State",
+      "Detail",
+      "Filter",
+      "Route"
+    ],
+    "resources": {
+      "media": []
+    },
+    "companionApp": {
+      "android": {
+        "url": "https://github.com/AndreasThinks/hermes-wristbound",
+        "apps": [
+          {
+            "package": "dev.wristbound.companion"
+          },
+          {
+            "package": "dev.wristbound.companion.debug"
+          }
+        ]
+      }
+    }
+  }
+}
