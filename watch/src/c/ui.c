@@ -1,6 +1,7 @@
 #include "ui.h"
 #include "comm.h"
 #include "model.h"
+#include "speaker.h"
 
 #define DICTATION_LEN 256
 #define STATUS_H 22
@@ -41,6 +42,10 @@ static const char *prv_submit_label(void) {
 }
 
 static const char *prv_playback_label(const char *message_id) {
+  const char *watch = wspk_label_for(message_id);
+  if (watch) {
+    return watch;
+  }
   if (strcmp(message_id, g_model.playback_message_id) != 0) {
     return NULL;
   }
@@ -189,6 +194,10 @@ typedef enum {
   ACT_RESUME,
   ACT_REPLAY,
   ACT_STOP,
+  ACT_WATCH_PLAY,
+  ACT_WATCH_PAUSE,
+  ACT_WATCH_RESUME,
+  ACT_WATCH_STOP,
   ACT_OPEN_SESSION,
   ACT_REPLY,
   ACT_DISMISS,
@@ -236,6 +245,10 @@ static void prv_msg_action(ActionMenu *menu, const ActionMenuItem *item, void *c
     case ACT_RESUME: comm_simple(CMD_RESUME); break;
     case ACT_REPLAY: comm_replay(s_msg_session_id, s_msg_id); break;
     case ACT_STOP: comm_simple(CMD_STOP); break;
+    case ACT_WATCH_PLAY: wspk_play(s_msg_session_id, s_msg_id); break;
+    case ACT_WATCH_PAUSE: wspk_pause(); break;
+    case ACT_WATCH_RESUME: wspk_resume(); break;
+    case ACT_WATCH_STOP: wspk_stop(); break;
     case ACT_OPEN_SESSION:
     case ACT_REPLY:
       strncpy(g_model.open_session_id, s_msg_session_id, SESSION_ID_LEN - 1);
@@ -264,7 +277,7 @@ static void prv_msg_select(ClickRecognizerRef rec, void *ctx) {
     return; // only assistant replies are playable
   }
   bool playing_this = strcmp(g_model.playback_message_id, s_msg_id) == 0;
-  ActionMenuLevel *root = action_menu_level_create(8);
+  ActionMenuLevel *root = action_menu_level_create(11);
   if (playing_this && g_model.playback == PLAYBACK_PLAYING) {
     action_menu_level_add_action(root, "Pause", prv_msg_action, (void *)ACT_PAUSE);
     action_menu_level_add_action(root, "Stop", prv_msg_action, (void *)ACT_STOP);
@@ -273,6 +286,32 @@ static void prv_msg_select(ClickRecognizerRef rec, void *ctx) {
     action_menu_level_add_action(root, "Stop", prv_msg_action, (void *)ACT_STOP);
   } else {
     action_menu_level_add_action(root, "Play", prv_msg_action, (void *)ACT_PLAY);
+  }
+  if (wspk_supported()) {
+    // The watch's own speaker: always an explicit choice, never a fallback for the phone route.
+    switch (wspk_state_for(s_msg_id)) {
+      case WSPK_PREPARING:
+        action_menu_level_add_action(root, "Stop on watch", prv_msg_action, (void *)ACT_WATCH_STOP);
+        break;
+      case WSPK_BUFFERING:
+      case WSPK_PLAYING:
+        action_menu_level_add_action(root, "Pause on watch", prv_msg_action, (void *)ACT_WATCH_PAUSE);
+        action_menu_level_add_action(root, "Stop on watch", prv_msg_action, (void *)ACT_WATCH_STOP);
+        break;
+      case WSPK_PAUSED:
+        action_menu_level_add_action(root, "Resume on watch", prv_msg_action, (void *)ACT_WATCH_RESUME);
+        action_menu_level_add_action(root, "Stop on watch", prv_msg_action, (void *)ACT_WATCH_STOP);
+        break;
+      case WSPK_DONE:
+        action_menu_level_add_action(root, "Replay on watch", prv_msg_action, (void *)ACT_WATCH_PLAY);
+        break;
+      case WSPK_FAILED:
+        action_menu_level_add_action(root, "Try watch speaker again", prv_msg_action, (void *)ACT_WATCH_PLAY);
+        break;
+      default:
+        action_menu_level_add_action(root, "Play on watch speaker", prv_msg_action, (void *)ACT_WATCH_PLAY);
+        break;
+    }
   }
   action_menu_level_add_action(root, "Play on phone speaker", prv_msg_action, (void *)ACT_PLAY_SPEAKER);
   action_menu_level_add_action(root, "Replay from start", prv_msg_action, (void *)ACT_REPLAY);

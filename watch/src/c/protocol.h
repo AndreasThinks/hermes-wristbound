@@ -3,7 +3,7 @@
 // Watch <-> Android AppMessage protocol. Keep in sync with
 // android/app/src/main/java/dev/wristbound/companion/pebble/Protocol.kt and docs/PROTOCOL.md.
 
-#define PROTO_VERSION 2
+#define PROTO_VERSION 3
 
 // Watch -> phone commands (MESSAGE_KEY_Cmd)
 typedef enum {
@@ -19,6 +19,9 @@ typedef enum {
   CMD_STOP = 10,
   CMD_LIST_AUDIO = 11,   // Filter
   CMD_OPEN_REPLY = 12,   // SessionId, MessageId; answered with a REPLY flagged REQUESTED
+  CMD_PLAY_WATCH = 13,   // SessionId, MessageId, TextBudget (largest PCM chunk the inbox takes)
+  CMD_AUDIO_PULL = 14,   // MessageId, Offset (bytes received), Length (room for this many more)
+  CMD_AUDIO_STOP = 15,   // MessageId
 } Command;
 
 // Phone -> watch message types (MESSAGE_KEY_Type)
@@ -31,6 +34,8 @@ typedef enum {
   TYPE_SUBMIT = 6,         // SessionId, State (SubmitState), Detail
   TYPE_SESSION_OPENED = 7, // SessionId, Title, Flags
   TYPE_AUDIO = 8,          // Index, Total, SessionId, MessageId, Title, Text (preview), Flags, Time
+  TYPE_AUDIO_START = 9,    // MessageId, Length (PCM bytes; 0 = failed), State (PCM format), Detail
+  TYPE_AUDIO_DATA = 10,    // MessageId, Offset, Data
 } MessageType;
 
 typedef enum {

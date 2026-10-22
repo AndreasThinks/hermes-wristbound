@@ -45,6 +45,7 @@ The phone talks to Hermes the way the Hermes desktop app and Hermes-Relay do: it
 - **History:** recent messages, newest first, and a full-screen view for each reply.
 - **Reply:** dictation where the watch has a microphone, or a quick reply (Yes, No, Continue, Thanks, Stop, Summarise that). Each send shows queued, working, completed, failed, uncertain or read-only.
 - **Playback** of one exact reply: Play, Play on phone speaker, Pause, Resume, Replay from start, Stop.
+- **Play on watch speaker** (Pebble Time 2 and Pebble 2 Duo): the reply's own Hermes audio, streamed from the phone and played by the watch, with buffering progress, Pause/Resume, Stop and Replay on watch. Always an explicit choice; it never falls back to the phone's speaker. Clips are capped at 2 minutes. Other watches do not show the action.
 - **Alerts:** an incoming-reply card when the app is open, even over the same session, with Play, Reply, Open session and Dismiss.
 - Clear connection states: connected, offline with cached data, stale, not set up, sign-in failed.
 
@@ -73,7 +74,8 @@ Every pull request builds both: the watch `.pbw` and the debug APK are attached 
 - **Tool approvals and clarifications** that Hermes asks for mid-turn must be answered from another client; the watch shows that the turn is waiting.
 - A watch reply in a Telegram session is stored in that session, as a desktop reply is; it is not posted into the Telegram chat. Replies to Telegram sessions can be turned off.
 - **Telegram's automatic voice replies** (voice mode) are sent to Telegram and deleted by Hermes without a transcript record, so no client can play the original; Wristbound can only read that reply aloud again. Audio from Hermes' text-to-speech tool is kept and plays as is.
-- No playback on the watch's own speaker yet, and no autoplay.
+- **Watch speaker playback is untested on hardware.** It works in the emulator up to the point of sound (the emulator has none). Audio is 8 kHz 8-bit to fit Bluetooth, so expect phone-call quality, and a slow link drops back to buffering mid-clip.
+- No autoplay.
 
 Details are in [docs/HERMES_API.md](docs/HERMES_API.md).
 

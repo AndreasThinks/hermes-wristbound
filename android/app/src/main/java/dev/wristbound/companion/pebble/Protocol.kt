@@ -10,7 +10,7 @@ import java.util.UUID
  */
 object Protocol {
     val WATCHAPP_UUID: UUID = UUID.fromString("094c587f-8bd7-4377-aa6b-ff55eb724b27")
-    const val VERSION = 2
+    const val VERSION = 3
 
     object Key {
         const val CMD = 10000u
@@ -30,6 +30,9 @@ object Protocol {
         const val FILTER = 10014u
         const val ROUTE = 10015u
         const val TIME = 10016u
+        const val DATA = 10017u
+        const val OFFSET = 10018u
+        const val LENGTH = 10019u
     }
 
     object Cmd {
@@ -45,6 +48,9 @@ object Protocol {
         const val STOP = 10
         const val LIST_AUDIO = 11
         const val OPEN_REPLY = 12
+        const val PLAY_WATCH = 13
+        const val AUDIO_PULL = 14
+        const val AUDIO_STOP = 15
     }
 
     object Type {
@@ -56,6 +62,8 @@ object Protocol {
         const val SUBMIT = 6
         const val SESSION_OPENED = 7
         const val AUDIO = 8
+        const val AUDIO_START = 9
+        const val AUDIO_DATA = 10
     }
 
     enum class Conn(val code: Int) { OK(0), OFFLINE(1), STALE(2), NOT_CONFIGURED(3), AUTH_ERROR(4), ERROR(5) }
@@ -98,6 +106,11 @@ object Protocol {
         const val PENDING = 4
         /** A REPLY the watch asked for (OPEN_REPLY): show it quietly, it is not a new alert. */
         const val REQUESTED = 8
+    }
+
+    /** Watch speaker PCM formats (the SDK's SpeakerPcmFormat). */
+    object PcmFormat {
+        const val PCM_8KHZ_8BIT = 0
     }
 
     object AudioFlag {
