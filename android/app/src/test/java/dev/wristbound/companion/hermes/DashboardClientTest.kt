@@ -62,6 +62,38 @@ class DashboardClientTest {
     }
 
     @Test
+    fun sessionFlagsDecodeFromSqliteIntegersAndJsonBooleans() = runBlocking {
+        // Hermes 0.22.2 returns SQLite flags as 0/1; other routes and versions send booleans.
+        server.enqueue(MockResponse().setBody(
+            """{"sessions":[
+               {"id":"a","hidden":0,"archived":1,"is_internal_child":0},
+               {"id":"b","hidden":true,"archived":false,"is_internal_child":null},
+               {"id":"c"}]}""",
+        ))
+        val sessions = client(MemoryStore(native("at-1"))).listSessions(50).associateBy { it.id }
+        assertEquals(listOf(false, true, false), sessions.getValue("a").let { listOf(it.hidden, it.archived, it.is_internal_child) })
+        assertEquals(listOf(true, false, null), sessions.getValue("b").let { listOf(it.hidden, it.archived, it.is_internal_child) })
+        assertEquals(listOf(null, null, null), sessions.getValue("c").let { listOf(it.hidden, it.archived, it.is_internal_child) })
+    }
+
+    @Test
+    fun unsupportedFlagsAndMalformedBodiesAreHandledProtocolErrors() = runBlocking {
+        val client = client(MemoryStore(native("at-1")))
+        for (body in listOf(
+            """{"sessions":[{"id":"a","hidden":2}]}""",
+            """{"sessions":[{"id":"a","hidden":"maybe"}]}""",
+            """{"sessions":[{"hidden":0}]}""",
+            """<html>proxy error</html>""",
+        )) {
+            server.enqueue(MockResponse().setBody(body))
+            val error = runCatching { client.listSessions(50) }.exceptionOrNull()
+            assertTrue("$body -> $error", error is HermesProtocolException)
+        }
+        server.enqueue(MockResponse().setBody("""{"messages":[{"id":1,"role":"user","timestamp":"soon"}]}"""))
+        assertTrue(runCatching { client.recentMessages("a", 10) }.exceptionOrNull() is HermesProtocolException)
+    }
+
+    @Test
     fun loopbackDashboardTakesTheSessionToken() = runBlocking {
         server.enqueue(MockResponse().setBody("""{"session_id":"s1","messages":[
             {"id":7,"role":"assistant","content":"Done.","timestamp":2.0},

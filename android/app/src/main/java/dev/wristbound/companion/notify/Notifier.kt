@@ -50,7 +50,7 @@ class Notifier(private val context: Context) {
      * One reply, keyed by its message id. [silent] refreshes a reply that already alerted (its
      * audio arrived later) without alerting again. Nothing plays until an action is pressed.
      */
-    fun reply(sessionId: String, messageId: String, title: String, text: String, private: Boolean, hasAudio: Boolean, silent: Boolean) {
+    fun reply(sessionId: String, messageId: String, title: String, text: String, private: Boolean, hasAudio: Boolean, silent: Boolean): Boolean {
         val body = when {
             private -> if (hasAudio) "New audio reply" else "New reply"
             hasAudio && !text.contains("[audio]") -> "[audio] $text"
@@ -71,7 +71,18 @@ class Notifier(private val context: Context) {
             .addAction(0, "Play on speaker", action(ActionReceiver.ACTION_PLAY_SPEAKER, sessionId, messageId))
             .addAction(0, "Read on watch", action(ActionReceiver.ACTION_OPEN_ON_WATCH, sessionId, messageId))
             .build()
-        post(messageId.hashCode(), n)
+        return post(messageId.hashCode(), n)
+    }
+
+    /**
+     * Whether a notification on [channel] can be shown: the permission is granted, the app's
+     * notifications are on, and the channel is not blocked.
+     */
+    fun canPost(channel: String = CH_REPLIES): Boolean {
+        val permitted = android.os.Build.VERSION.SDK_INT < 33 ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        if (!permitted || !manager.areNotificationsEnabled()) return false
+        return manager.getNotificationChannel(channel)?.importance != NotificationManager.IMPORTANCE_NONE
     }
 
     fun toolActivity(sessionTitle: String, toolName: String) {
@@ -106,12 +117,11 @@ class Notifier(private val context: Context) {
         .setContentIntent(openApp())
         .build()
 
-    private fun post(id: Int, n: Notification) {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED ||
-            android.os.Build.VERSION.SDK_INT < 33
-        ) {
-            manager.notify(id, n)
-        }
+    /** Post [n] if it can be shown; false when notifications are blocked. */
+    private fun post(id: Int, n: Notification): Boolean {
+        if (!canPost(n.channelId)) return false
+        manager.notify(id, n)
+        return true
     }
 
     private fun openApp(): PendingIntent = PendingIntent.getActivity(

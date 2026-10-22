@@ -45,6 +45,8 @@ interface AlertStore {
     /** Record [key]; false if it was already recorded. */
     fun markAlerted(key: String): Boolean
     fun isAlerted(key: String): Boolean
+    /** Forget [key], so an alert that could not be shown is decided again. */
+    fun unmarkAlerted(key: String)
     /** Null until the first poll has taken a baseline. */
     var pollCursors: PollCursors?
 }
@@ -63,12 +65,22 @@ data class PollCursors(val since: Double, val sessions: Map<String, Double>)
  * text is not alerting can still alert once when its audio is there, including audio that
  * arrives after the text, and a reply that already alerted is only refreshed when its audio
  * turns up.
+ *
+ * Deciding and delivering are separate steps. [deliver] says whether the alert reached the
+ * user (the watch acknowledged it, or a phone notification was posted). When it did not, the
+ * decision is rolled back and the session's checkpoint holds, so the next pass tries again;
+ * after [MAX_ATTEMPTS] failures the alert is dropped rather than retried forever.
  */
 class ReplyAlerts(
     private val store: AlertStore,
     private val policy: () -> AlertPolicy,
-    private val deliver: suspend (ReplyAlert) -> Unit,
+    private val deliver: suspend (ReplyAlert) -> Boolean,
 ) {
+    /** Failed deliveries per reply id, in memory: a restart gets a fresh set of attempts. */
+    private val failures = object : LinkedHashMap<String, Int>() {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Int>?) = size > 100
+    }
+
     /**
      * A turn sent from the watch ended in [session]: alert its reply, if the policy allows.
      * Only answers after the last user row count, so older history never alerts here.
@@ -110,8 +122,10 @@ class ReplyAlerts(
                 } catch (e: Exception) {
                     continue
                 }
-                for (reply in SessionMapper.replies(messages)) consider(session, reply, floor)
-                cursors[session.id] = session.activity
+                var delivered = true
+                for (reply in SessionMapper.replies(messages)) delivered = consider(session, reply, floor) && delivered
+                // An alert that reached nobody keeps the checkpoint, so the next pass retries it.
+                if (delivered) cursors[session.id] = session.activity
             }
         } finally {
             store.pollCursors = PollCursors(saved.since, bounded(cursors))
@@ -119,33 +133,48 @@ class ReplyAlerts(
         return moved
     }
 
-    /** Replies at or before [floor] predate the checkpoint; only their late audio still counts. */
-    private suspend fun consider(session: HermesSession, reply: SessionMapper.Reply, floor: Double?) {
-        if (floor != null && !store.isAlerted(reply.id) && (reply.message.timestamp ?: Double.MAX_VALUE) <= floor + EPSILON) return
-        decide(session, reply, policy())?.let { deliver(it) }
+    /**
+     * Replies at or before [floor] predate the checkpoint; only their late audio still counts.
+     * Returns false when an alert was due but could not be delivered (and will be retried).
+     */
+    private suspend fun consider(session: HermesSession, reply: SessionMapper.Reply, floor: Double?): Boolean {
+        if (floor != null && !store.isAlerted(reply.id) && (reply.message.timestamp ?: Double.MAX_VALUE) <= floor + EPSILON) return true
+        val decision = decide(session, reply, policy()) ?: return true
+        if (deliver(decision.alert)) {
+            synchronized(failures) { failures.remove(reply.id) }
+            return true
+        }
+        val attempts = synchronized(failures) { (failures[reply.id] ?: 0).plus(1).also { failures[reply.id] = it } }
+        if (attempts >= MAX_ATTEMPTS) return true
+        decision.marked.forEach(store::unmarkAlerted)
+        return false
     }
 
+    /** An alert to deliver, and the keys recorded for it (rolled back if delivery fails). */
+    data class Decision(val alert: ReplyAlert, val marked: List<String>)
+
     /** The alert for [reply], if any, recording it so it is never decided twice. */
-    fun decide(session: HermesSession, reply: SessionMapper.Reply, policy: AlertPolicy): ReplyAlert? {
+    fun decide(session: HermesSession, reply: SessionMapper.Reply, policy: AlertPolicy): Decision? {
         val audioKey = AUDIO_PREFIX + reply.id
-        fun alert(silent: Boolean) =
-            ReplyAlert(session.id, session.displayTitle, reply.id, reply.message.text, reply.hasAudio, silent)
+        fun alert(silent: Boolean, marked: List<String>) =
+            Decision(ReplyAlert(session.id, session.displayTitle, reply.id, reply.message.text, reply.hasAudio, silent), marked)
 
         if (store.markAlerted(reply.id)) {
             // First sight of this reply. Either way it is now decided; audio is decided with it
             // when it is already there.
             if (reply.hasAudio) store.markAlerted(audioKey)
+            val marked = if (reply.hasAudio) listOf(reply.id, audioKey) else listOf(reply.id)
             return when {
-                policy.textAlerts(session) -> alert(silent = false)
-                reply.hasAudio && policy.audioAlerts(session) -> alert(silent = false)
+                policy.textAlerts(session) -> alert(silent = false, marked)
+                reply.hasAudio && policy.audioAlerts(session) -> alert(silent = false, marked)
                 else -> null
             }
         }
         // Seen before: only newly arrived audio matters.
         if (!reply.hasAudio || !store.markAlerted(audioKey)) return null
         return when {
-            policy.textAlerts(session) -> alert(silent = true)
-            policy.audioAlerts(session) -> alert(silent = false)
+            policy.textAlerts(session) -> alert(silent = true, listOf(audioKey))
+            policy.audioAlerts(session) -> alert(silent = false, listOf(audioKey))
             else -> null
         }
     }
@@ -156,6 +185,7 @@ class ReplyAlerts(
 
     companion object {
         const val AUDIO_PREFIX = "audio:"
+        const val MAX_ATTEMPTS = 5
         private const val EPSILON = 0.001
         private const val MAX_CURSORS = 200
     }

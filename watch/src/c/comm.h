@@ -10,6 +10,7 @@ typedef struct {
   void (*submit_changed)(void);
   void (*playback_changed)(void);
   void (*session_opened)(void);
+  void (*audio_changed)(void);
   void (*reply_received)(const char *session_id, const char *message_id,
                          const char *title, const char *text, uint8_t flags);
 } CommHandlers;
@@ -25,3 +26,5 @@ void comm_new_session(const char *text);
 void comm_play(const char *session_id, const char *message_id, PlaybackRoute route);
 void comm_replay(const char *session_id, const char *message_id);
 void comm_simple(Command cmd); // PAUSE, RESUME, STOP
+void comm_list_audio(void);
+void comm_open_reply(const char *session_id, const char *message_id);

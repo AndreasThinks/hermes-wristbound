@@ -9,6 +9,13 @@
 #define MESSAGE_ID_LEN 40
 #define TITLE_LEN 48
 #define DETAIL_LEN 64
+#define PREVIEW_LEN 64
+
+#if defined(PBL_PLATFORM_APLITE)
+#define MAX_AUDIO 5
+#else
+#define MAX_AUDIO 15
+#endif
 
 // Per-message text budget the phone truncates to. Aplite has a much smaller heap.
 #if defined(PBL_PLATFORM_APLITE)
@@ -33,6 +40,15 @@ typedef struct {
 } Message;
 
 typedef struct {
+  char session_id[SESSION_ID_LEN];
+  char message_id[MESSAGE_ID_LEN];
+  char title[TITLE_LEN];
+  char preview[PREVIEW_LEN];
+  uint32_t time; // seconds since the epoch
+  uint8_t flags;
+} AudioItem;
+
+typedef struct {
   ConnState conn;
   char conn_detail[DETAIL_LEN];
 
@@ -40,6 +56,10 @@ typedef struct {
   Session sessions[MAX_SESSIONS];
   int session_count;
   bool sessions_loading;
+
+  AudioItem audio[MAX_AUDIO];
+  int audio_count;
+  bool audio_loading;
 
   char open_session_id[SESSION_ID_LEN];
   char open_session_title[TITLE_LEN];

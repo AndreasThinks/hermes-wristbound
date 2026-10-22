@@ -1,0 +1,6 @@
+<resources>
+    <!-- Matches the watchapp's cobalt highlight. -->
+    <color name="wristbound_blue">#0055AA</color>
+    <color name="wristbound_blue_light">#3D8BDB</color>
+    <color name="card_stroke">#330055AA</color>
+</resources>

@@ -1,4 +1,4 @@
-# Watch ↔ phone protocol (v1)
+# Watch ↔ phone protocol (v2)
 
 Pebble AppMessages between the watchapp (`watch/src/c/protocol.h`) and the Android companion (`android/.../pebble/Protocol.kt`). The phone holds all Hermes state and credentials; the watch holds only what is on screen.
 
@@ -24,6 +24,7 @@ Keys are numbered by the Pebble SDK from the order of `messageKeys` in `watch/pa
 | Detail | 10013 | cstring (≤ 63 bytes), human-readable status |
 | Filter | 10014 | uint8: 1 include Telegram sessions |
 | Route | 10015 | uint8: 0 current route, 1 phone speaker allowed |
+| Time | 10016 | uint32, seconds since the epoch |
 
 ## Watch → phone (`Cmd`)
 
@@ -39,6 +40,8 @@ Keys are numbered by the Pebble SDK from the order of `messageKeys` in `watch/pa
 | 8 | RESUME | |
 | 9 | REPLAY | SessionId, MessageId |
 | 10 | STOP | |
+| 11 | LIST_AUDIO | Filter. Asks for the Recent audio list, refreshed from Hermes. |
+| 12 | OPEN_REPLY | SessionId, MessageId. Asks for one reply's full text; answered with REPLY flagged *requested*. |
 
 ## Phone → watch (`Type`)
 
@@ -47,12 +50,13 @@ Keys are numbered by the Pebble SDK from the order of `messageKeys` in `watch/pa
 | 1 | SESSION | Index, Total, SessionId, Title, Flags. Total 0 means an empty list. |
 | 2 | MESSAGE | SessionId, Index, Total, MessageId, Role, Flags, Text. Oldest first; the watch shows newest first. |
 | 3 | STATUS | State (0 ok, 1 offline, 2 stale, 3 not configured, 4 auth error, 5 error), Detail |
-| 4 | REPLY | SessionId, MessageId, Title, Text, Flags. A new final reply; the watch vibrates and opens it unless that session is already on screen. |
+| 4 | REPLY | SessionId, MessageId, Title, Text, Flags. A new final reply; the watch vibrates and opens it as a card, even over the same session. With flag 8 (*requested*) it answers OPEN_REPLY instead: no vibration, and it only fills in the card already showing that message. |
 | 5 | PLAYBACK | MessageId, State (0 idle, 1 playing, 2 paused, 3 needs speaker, 4 error, 5 done), Detail |
 | 6 | SUBMIT | SessionId, State (1 queued, 2 working, 3 completed, 4 failed, 5 uncertain, 6 read-only, 7 cancelled), Detail |
 | 7 | SESSION_OPENED | SessionId, Title, Flags. Sent after NEW_SESSION created a session. |
+| 8 | AUDIO | Index, Total, SessionId, MessageId, Title (session), Text (preview, ≤ 63 bytes), Flags (1 new, 2 Telegram), Time. One Recent audio row, newest first. Total 0 means an empty list. |
 
-Session flags: 1 unread, 2 Telegram origin, 4 Hermes refused to continue it (for example a Kanban worker transcript), 8 Hermes is working. Message flags: 1 truncated (rest on phone), 2 Hermes generated audio for this reply, 4 pending.
+Session flags: 1 unread, 2 Telegram origin, 4 Hermes refused to continue it (for example a Kanban worker transcript), 8 Hermes is working. Message flags: 1 truncated (rest on phone), 2 Hermes generated audio for this reply, 4 pending, 8 requested (REPLY only).
 
 ## Rules
 
@@ -60,4 +64,6 @@ Session flags: 1 unread, 2 Telegram origin, 4 Hermes refused to continue it (for
 - The phone answers every command asynchronously: it acknowledges the AppMessage at once and sends results as separate messages, so a slow Hermes call never times out the watch.
 - Lists are sent as numbered pages. Index 0 resets the list on the watch. Pages for a session the user has left are ignored.
 - A transport acknowledgement means only that the phone has the command. Whether Hermes ran it arrives later as SUBMIT states. *Uncertain* means the phone lost the stream after Hermes may have accepted the turn; it is not resent.
+- Recent audio lists assistant replies that carry audio Hermes generated (its text-to-speech output), from the 12 most recently active visible sessions, the last 60 transcript rows of each, newest 15 overall (5 on aplite). The phone keeps a bounded copy (30 items) so the list shows at once, offline and after a restart; HELLO sends that copy, LIST_AUDIO sends it and then a refreshed one. Items are new until opened on the watch. The user's own recordings never appear, nor do Telegram's automatic voice replies, which Hermes does not keep.
+- A watch and phone on different protocol versions show "Update watch or phone app".
 - PLAY names one exact message id. Without headphones and with Route 0 the phone answers PLAYBACK state 3 instead of switching to the loudspeaker.

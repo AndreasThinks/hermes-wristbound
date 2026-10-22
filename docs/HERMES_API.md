@@ -58,7 +58,9 @@ How the companion decides which audio belongs to which reply (`SessionMapper.rep
 
 One policy decides every reply alert, whether the reply came from a turn sent on the watch, from background polling, or from recovery after a dropped socket. Settings: replies on or off, scope (all eligible sessions or only the open one), Telegram text alerts (off by default), and Telegram audio alerts (on by default: a Telegram reply that carries Hermes audio alerts even with Telegram text alerts off). Each reply alerts at most once. Its text and its audio are recorded separately, so audio that turns up later either alerts once (when the text did not alert) or silently refreshes the alert already shown. Nothing plays until Play is pressed.
 
-Polling keeps a checkpoint per session, persisted on the phone. The first poll ever only records a baseline. A session's checkpoint moves only after its history was fetched and processed; a failed fetch, or a turn still running from the watch, leaves it for the next poll. After a restart, polling picks up from the saved checkpoints.
+Deciding and delivering are separate. An alert counts as delivered when the open watchapp acknowledges the reply card, or a phone notification is posted. A watch that does not acknowledge is treated as closed and the phone notification is used instead; if neither works (notifications blocked), the decision is rolled back and retried on the next poll, up to five times.
+
+Polling keeps a checkpoint per session, persisted on the phone. The first poll ever only records a baseline, so history from before sign-in never alerts. A session's checkpoint moves only after its history was fetched and processed; a failed fetch, or a turn still running from the watch, leaves it for the next poll. After a restart, polling picks up from the saved checkpoints.
 
 ## Telegram replies
 
@@ -78,7 +80,7 @@ When a turn in a Telegram session finishes, the reply is stored in that session 
 
 ## Remaining limits
 
-**Push delivery.** The gateway socket broadcasts `sessions.changed`, but holding a socket open on a locked phone is fragile, so replies that arrive through Telegram, Ringbearer or the desktop are still found by polling `GET /api/sessions` from the optional foreground service (30 s to 5 min). Replies to turns sent from the watch arrive live over the socket.
+**Push delivery.** The gateway socket broadcasts `sessions.changed`, but holding a socket open on a locked phone is fragile, so replies that arrive through Telegram, Ringbearer or the desktop are still found by polling `GET /api/sessions`: every 30 s while the watchapp is open, and from the optional foreground service (30 s to 5 min) while it is closed. Replies to turns sent from the watch arrive live over the socket.
 
 **Server prompts.** Tool approvals, clarifications and sudo or secret prompts need another client (desktop, terminal UI or Telegram) to answer. The turn waits; the watch shows that it is waiting.
 

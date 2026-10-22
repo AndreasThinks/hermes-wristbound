@@ -1,7 +1,15 @@
 package dev.wristbound.companion.hermes
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -23,9 +31,9 @@ data class HermesSession(
     val ended_at: Double? = null,
     val last_active: Double? = null,
     val message_count: Int? = null,
-    val archived: Boolean? = null,
-    val hidden: Boolean? = null,
-    val is_internal_child: Boolean? = null,
+    @Serializable(with = SessionFlag::class) val archived: Boolean? = null,
+    @Serializable(with = SessionFlag::class) val hidden: Boolean? = null,
+    @Serializable(with = SessionFlag::class) val is_internal_child: Boolean? = null,
 ) {
     val isTelegram: Boolean get() = source.equals("telegram", ignoreCase = true)
 
@@ -36,6 +44,30 @@ data class HermesSession(
 
     /** Most recent activity, for unread tracking. */
     val activity: Double get() = last_active ?: ended_at ?: started_at ?: 0.0
+}
+
+/**
+ * A session flag. Hermes stores these in SQLite and returns them as `0`/`1` on some routes and
+ * as JSON booleans on others, so both are accepted. Anything else is a protocol error rather
+ * than a silent `false`.
+ */
+object SessionFlag : KSerializer<Boolean?> {
+    override val descriptor = PrimitiveSerialDescriptor("SessionFlag", PrimitiveKind.BOOLEAN)
+
+    override fun deserialize(decoder: Decoder): Boolean? {
+        val element = (decoder as? JsonDecoder)?.decodeJsonElement() ?: return decoder.decodeBoolean()
+        if (element is JsonNull) return null
+        val primitive = element as? JsonPrimitive ?: throw SerializationException("Session flag is not a value: $element")
+        return when (primitive.content.lowercase()) {
+            "true", "1" -> true
+            "false", "0" -> false
+            else -> throw SerializationException("Unsupported session flag: ${primitive.content}")
+        }
+    }
+
+    override fun serialize(encoder: Encoder, value: Boolean?) {
+        if (value == null) encoder.encodeNull() else encoder.encodeBoolean(value)
+    }
 }
 
 @Serializable

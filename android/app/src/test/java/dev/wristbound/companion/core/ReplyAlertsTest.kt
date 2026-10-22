@@ -16,6 +16,7 @@ class ReplyAlertsTest {
         val keys = mutableSetOf<String>()
         override fun markAlerted(key: String) = keys.add(key)
         override fun isAlerted(key: String) = key in keys
+        override fun unmarkAlerted(key: String) { keys.remove(key) }
         override var pollCursors: PollCursors? = null
     }
 
@@ -26,7 +27,13 @@ class ReplyAlertsTest {
     )
     private val store = MemoryStore()
     private val alerts = mutableListOf<ReplyAlert>()
-    private fun dispatcher(s: AlertStore = store) = ReplyAlerts(s, { policy }) { alerts += it }
+    /** Deliveries that fail before one succeeds; failed attempts are recorded in [attempts]. */
+    private var deliveryFailures = 0
+    private val attempts = mutableListOf<String>()
+    private fun dispatcher(s: AlertStore = store) = ReplyAlerts(s, { policy }) {
+        attempts += it.messageId
+        if (deliveryFailures > 0) { deliveryFailures--; false } else { alerts += it; true }
+    }
 
     /** The server: session rows and each session's transcript, both editable between polls. */
     private val sessions = mutableMapOf<String, HermesSession>()
@@ -226,5 +233,80 @@ class ReplyAlertsTest {
     fun aDirectCompletionDoesNotAlertEarlierTurns() = runTest {
         dispatcher().turnFinished(HermesSession("cli", source = "cli"), listOf(user(1, 1.0), answer(2, 2.0), user(3, 3.0)))
         assertEquals(emptyList<ReplyAlert>(), alerts)
+    }
+
+    @Test
+    fun anUndeliveredAlertIsRetriedOnTheNextPollAndThenShownOnce() = runTest {
+        session("tg", "telegram", 10.0)
+        val d = dispatcher()
+        poll(d)
+        append("tg", 20.0, user(3, 15.0), speech(4, 18.0), answer(5, 20.0, "Audio reply"))
+        deliveryFailures = 1
+        poll(d)
+        assertEquals(emptyList<ReplyAlert>(), alerts)
+        // Not recorded as alerted, and the checkpoint did not move past it.
+        assertFalse(store.isAlerted("5") || store.isAlerted("audio:5"))
+        assertEquals(10.0, store.pollCursors!!.sessions["tg"] ?: store.pollCursors!!.since, 0.0)
+        poll(d)
+        assertEquals(listOf("5"), alerts.map { it.messageId })
+        assertTrue(alerts.single().hasAudio)
+        poll(d)
+        sessions["tg"] = sessions.getValue("tg").copy(last_active = 21.0)
+        poll(d)
+        assertEquals(1, alerts.size)
+        assertEquals(listOf("5", "5"), attempts)
+    }
+
+    @Test
+    fun anUndeliveredAlertSurvivesARestart() = runTest {
+        session("cli", "cli", 10.0)
+        poll()
+        append("cli", 20.0, user(3, 15.0), answer(4, 20.0))
+        deliveryFailures = 1
+        poll()
+        // A new process with the same store picks it up.
+        poll(dispatcher())
+        assertEquals(listOf("4"), alerts.map { it.messageId })
+    }
+
+    @Test
+    fun lateAudioThatFailsToDeliverIsRetriedWithoutRepeatingTheText() = runTest {
+        session("tg", "telegram", 10.0)
+        val d = dispatcher()
+        poll(d)
+        append("tg", 20.0, user(3, 15.0), answer(4, 20.0))
+        poll(d) // Telegram text alerts off: decided, nothing shown
+        append("tg", 30.0, msg("""{"id":5,"role":"assistant","timestamp":30.0,"content":"MEDIA:/home/h/.hermes/cache/audio/tts_5.ogg"}"""))
+        deliveryFailures = 1
+        poll(d)
+        assertEquals(emptyList<ReplyAlert>(), alerts)
+        poll(d)
+        assertEquals(listOf("4"), alerts.map { it.messageId })
+        assertTrue(alerts.single().hasAudio && !alerts.single().silent)
+    }
+
+    @Test
+    fun deliveryIsAbandonedAfterBoundedAttempts() = runTest {
+        session("cli", "cli", 10.0)
+        val d = dispatcher()
+        poll(d)
+        append("cli", 20.0, user(3, 15.0), answer(4, 20.0))
+        deliveryFailures = 100
+        repeat(ReplyAlerts.MAX_ATTEMPTS + 3) { poll(d) }
+        assertEquals(ReplyAlerts.MAX_ATTEMPTS, attempts.size)
+        assertEquals(20.0, store.pollCursors!!.sessions["cli"]!!, 0.0)
+    }
+
+    @Test
+    fun aFailedDirectCompletionIsPickedUpByPolling() = runTest {
+        session("cli", "cli", 10.0)
+        val d = dispatcher()
+        poll(d)
+        append("cli", 20.0, user(3, 15.0), answer(4, 20.0))
+        deliveryFailures = 1
+        d.turnFinished(sessions.getValue("cli"), transcripts.getValue("cli"))
+        assertEquals(emptyList<ReplyAlert>(), alerts)
+        poll(d)
+        assertEquals(listOf("4"), alerts.map { it.messageId })
     }
 }

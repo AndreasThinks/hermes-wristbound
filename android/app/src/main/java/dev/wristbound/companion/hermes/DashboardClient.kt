@@ -52,7 +52,7 @@ class DashboardClient(
             addQueryParameter("limit", limit.coerceIn(1, 100).toString())
             addQueryParameter("order", "recent")
         }
-        json.decodeFromString(SessionList.serializer(), get(url)).sessions
+        HermesHttp.decode(SessionList.serializer(), get(url), "a session list").sessions
     }
 
     override suspend fun recentMessages(sessionId: String, limit: Int): List<HermesMessage> = withContext(Dispatchers.IO) {
@@ -64,7 +64,7 @@ class DashboardClient(
             addQueryParameter("inline_images", "false")
         }
         // The latest page comes back in display order; sort defensively by row id and time.
-        json.decodeFromString(MessageList.serializer(), get(url)).messages
+        HermesHttp.decode(MessageList.serializer(), get(url), "a history").messages
             .sortedWith(compareBy({ it.timestamp ?: 0.0 }, { it.stableId.toLongOrNull() ?: 0L }))
     }
 

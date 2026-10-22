@@ -10,7 +10,7 @@ import java.util.UUID
  */
 object Protocol {
     val WATCHAPP_UUID: UUID = UUID.fromString("094c587f-8bd7-4377-aa6b-ff55eb724b27")
-    const val VERSION = 1
+    const val VERSION = 2
 
     object Key {
         const val CMD = 10000u
@@ -29,6 +29,7 @@ object Protocol {
         const val DETAIL = 10013u
         const val FILTER = 10014u
         const val ROUTE = 10015u
+        const val TIME = 10016u
     }
 
     object Cmd {
@@ -42,6 +43,8 @@ object Protocol {
         const val RESUME = 8
         const val REPLAY = 9
         const val STOP = 10
+        const val LIST_AUDIO = 11
+        const val OPEN_REPLY = 12
     }
 
     object Type {
@@ -52,6 +55,7 @@ object Protocol {
         const val PLAYBACK = 5
         const val SUBMIT = 6
         const val SESSION_OPENED = 7
+        const val AUDIO = 8
     }
 
     enum class Conn(val code: Int) { OK(0), OFFLINE(1), STALE(2), NOT_CONFIGURED(3), AUTH_ERROR(4), ERROR(5) }
@@ -92,6 +96,13 @@ object Protocol {
         const val TRUNCATED = 1
         const val HAS_AUDIO = 2
         const val PENDING = 4
+        /** A REPLY the watch asked for (OPEN_REPLY): show it quietly, it is not a new alert. */
+        const val REQUESTED = 8
+    }
+
+    object AudioFlag {
+        const val NEW = 1
+        const val TELEGRAM = 2
     }
 
     /** Default text budget if the watch never said HELLO (matches the aplite budget). */
@@ -102,4 +113,7 @@ object Protocol {
     const val MESSAGE_ID_BUDGET = 39
     const val MAX_SESSIONS = 20
     const val MAX_MESSAGES = 12
+    /** Recent audio items sent to the watch; aplite keeps fewer (watch/src/c/model.h). */
+    const val MAX_AUDIO = 15
+    const val PREVIEW_BUDGET = 63
 }

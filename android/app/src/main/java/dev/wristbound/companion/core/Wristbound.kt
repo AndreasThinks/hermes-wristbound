@@ -5,9 +5,11 @@ import android.util.Log
 import dev.wristbound.companion.hermes.AudioClip
 import dev.wristbound.companion.hermes.DashboardAuth
 import dev.wristbound.companion.hermes.DashboardClient
+import dev.wristbound.companion.hermes.Endpoint
 import dev.wristbound.companion.hermes.HermesApi
 import dev.wristbound.companion.hermes.HermesHttpException
 import dev.wristbound.companion.hermes.HermesMessage
+import dev.wristbound.companion.hermes.HermesProtocolException
 import dev.wristbound.companion.hermes.HermesSession
 import dev.wristbound.companion.notify.Notifier
 import dev.wristbound.companion.pebble.Protocol
@@ -16,11 +18,22 @@ import dev.wristbound.companion.pebble.WatchCodec
 import dev.wristbound.companion.pebble.WatchCommand
 import dev.wristbound.companion.pebble.WatchLink
 import dev.wristbound.companion.playback.PlaybackController
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -37,7 +50,13 @@ class Wristbound private constructor(context: Context) {
     private val app = context.applicationContext
     val settings = Settings(app)
     val state = LocalState(app)
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /**
+     * Every watch command, turn and poll runs here. Expected failures are handled where they
+     * happen; this handler only stops an unexpected one from taking the whole companion down.
+     */
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e ->
+        Log.e(TAG, "unhandled error in companion work", e)
+    })
     private val watch = WatchLink(app)
     private val notifier = Notifier(app)
     private val playback = PlaybackController(app) { id, s, detail -> onPlaybackState(id, s, detail) }
@@ -52,10 +71,12 @@ class Wristbound private constructor(context: Context) {
     private val activeTurns = ConcurrentHashMap<String, Job>()
     private val sessionsById = ConcurrentHashMap<String, HermesSession>()
     /** Full reply text and Hermes audio paths by message id, for playback. Bounded. */
-    private val replies = object : LinkedHashMap<String, Reply>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Reply>?) = size > 64
+    private val replies = object : LinkedHashMap<String, Reply>(128, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Reply>?) = size > 128
     }
+    private val inboxMutex = Mutex()
     private val pollMutex = Mutex()
+    private var monitor: Job? = null
     private val alerts = ReplyAlerts(state, ::alertPolicy) { deliverAlert(it) }
     private val audioDir = File(app.cacheDir, "audio").apply { mkdirs() }
 
@@ -63,36 +84,87 @@ class Wristbound private constructor(context: Context) {
 
     @Volatile private var client: DashboardClient? = null
 
-    /** The dashboard client for the configured URL; rebuilt when the URL changes. */
+    /** The dashboard client for the active URL; rebuilt when the URL changes. */
     fun client(): DashboardClient? {
         val url = settings.baseUrl
         if (url.isBlank()) return null
-        client?.let { if (it.auth.base.toString().trimEnd('/') == url.trimEnd('/')) return it }
-        return runCatching { DashboardClient(DashboardAuth(url, settings)) }.getOrNull().also { client = it }
+        client?.let { if (Endpoint.same(it.auth.base.toString(), url)) return it }
+        return runCatching { DashboardClient(DashboardAuth(url, settings.credentialsFor(url))) }
+            .onFailure { Log.w(TAG, "active dashboard URL is unusable: ${it.javaClass.simpleName}") }
+            .getOrNull().also { client = it }
     }
 
     private fun api(): DashboardClient? = if (settings.isConfigured) client() else null
 
-    // -- watch lifecycle ------------------------------------------------------------------------
+    // -- backend state --------------------------------------------------------------------------
 
-    fun onWatchAppOpened() {
-        watchOpen = true
+    private val _backend = MutableStateFlow(BackendState(BackendLink.UNKNOWN))
+
+    /** How the last request to Hermes went: separate from whether credentials are saved. */
+    val backend: StateFlow<BackendState> = _backend
+
+    private fun recordBackend(error: Throwable?) {
+        _backend.value = when (error) {
+            null -> BackendState(BackendLink.CONNECTED)
+            is HermesHttpException -> if (error.isAuth) BackendState(BackendLink.SIGN_IN_REQUIRED, "Hermes rejected the sign-in")
+                else BackendState(BackendLink.ERROR, "Hermes error: ${error.message}")
+            is HermesProtocolException -> BackendState(BackendLink.ERROR, error.message.orEmpty())
+            else -> BackendState(BackendLink.OFFLINE, error.message.orEmpty())
+        }
     }
 
-    fun onWatchAppClosed() {
-        watchOpen = false
+    /**
+     * Check the active dashboard end to end: the session list and the gateway socket that
+     * sends replies. Returns the number of recent sessions and how many are from Telegram.
+     */
+    suspend fun checkConnection(): Pair<Int, Int> {
+        val client = api() ?: throw HermesHttpException(401, "signed_out", "Sign in to Hermes")
+        _backend.value = BackendState(BackendLink.CHECKING)
+        try {
+            val sessions = client.listSessions(20)
+            client.openGateway().close()
+            recordBackend(null)
+            return sessions.size to sessions.count { it.isTelegram }
+        } catch (e: IOException) {
+            recordBackend(e)
+            throw e
+        }
+    }
+
+    /** Sign-in or sign-out changed the credentials or the active dashboard. */
+    fun onCredentialsChanged() {
+        client = null
+        _backend.value = BackendState(if (settings.isConfigured) BackendLink.UNKNOWN else BackendLink.SIGNED_OUT)
+        updateMonitoring()
+        if (watchOpen) scope.launch { pushSessions() }
+    }
+
+    // -- watch lifecycle ------------------------------------------------------------------------
+
+    fun onWatchAppOpened() = setWatchOpen(true)
+
+    fun onWatchAppClosed() = setWatchOpen(false)
+
+    private fun setWatchOpen(open: Boolean) {
+        if (watchOpen == open) return
+        watchOpen = open
+        Log.i(TAG, if (open) "watchapp open" else "watchapp closed")
+        updateMonitoring()
     }
 
     suspend fun onWatchCommand(cmd: WatchCommand) {
+        // Any command proves the watchapp is open, even if the open event was missed.
+        setWatchOpen(true)
         when (cmd) {
             is WatchCommand.Hello -> {
-                watchOpen = true
                 textBudget = cmd.textBudget.coerceIn(64, 4000)
                 settings.includeTelegram = cmd.includeTelegram
                 if (cmd.protoVersion != Protocol.VERSION) {
                     watch.send(WatchCodec.status(Protocol.Conn.ERROR, "Update watch or phone app"))
                 }
                 pushSessions()
+                // The saved list only: the watch asks for a refresh when Recent audio is opened.
+                sendAudioPages(state.loadAudio())
                 pendingReply?.let { (sid, mid) ->
                     pendingReply = null
                     sendReplyToWatch(sid, mid)
@@ -110,13 +182,26 @@ class Wristbound private constructor(context: Context) {
             WatchCommand.Pause -> playback.pause()
             WatchCommand.Resume -> playback.resume(lastAllowSpeaker)
             WatchCommand.Stop -> playback.stop()
+            is WatchCommand.ListAudio -> {
+                settings.includeTelegram = cmd.includeTelegram
+                pushAudio(refresh = true)
+            }
+            is WatchCommand.OpenReply -> {
+                state.markHeard(cmd.messageId)
+                sendReplyToWatch(cmd.sessionId, cmd.messageId, requested = true)
+            }
         }
     }
 
     // -- sessions & history ---------------------------------------------------------------------
 
     private suspend fun fetchSessions(api: HermesApi): List<HermesSession> {
-        val sessions = api.listSessions(100)
+        val sessions = try {
+            api.listSessions(100).also { recordBackend(null) }
+        } catch (e: IOException) {
+            recordBackend(e)
+            throw e
+        }
         sessions.forEach { sessionsById[it.id] = it }
         state.baseline(sessions.associate { it.id to it.activity })
         return sessions
@@ -139,6 +224,10 @@ class Wristbound private constructor(context: Context) {
             sendSessionPages(visible)
         } catch (e: HermesHttpException) {
             watch.send(WatchCodec.status(if (e.isAuth) Protocol.Conn.AUTH_ERROR else Protocol.Conn.ERROR, e.message.orEmpty()))
+            sendSessionPages(state.loadSessions()?.sessions.orEmpty())
+        } catch (e: HermesProtocolException) {
+            Log.w(TAG, "unreadable session list", e)
+            watch.send(WatchCodec.status(Protocol.Conn.ERROR, "Hermes sent bad data"))
             sendSessionPages(state.loadSessions()?.sessions.orEmpty())
         } catch (e: IOException) {
             val cached = state.loadSessions()
@@ -166,7 +255,12 @@ class Wristbound private constructor(context: Context) {
             if (api == null) throw IOException("not configured")
             val raw = api.recentMessages(sessionId, 40)
             rememberReplies(raw)
+            noteAudio(sessionsById[sessionId], raw)
             SessionMapper.watchMessages(raw, settings.toolActivity).also { state.saveMessages(sessionId, title, it) }
+        } catch (e: HermesProtocolException) {
+            Log.w(TAG, "unreadable history", e)
+            watch.send(WatchCodec.status(Protocol.Conn.ERROR, "Hermes sent bad data"))
+            state.loadMessages(sessionId)?.messages.orEmpty()
         } catch (e: IOException) {
             watch.send(WatchCodec.status(Protocol.Conn.OFFLINE, "Offline - cached"))
             state.loadMessages(sessionId)?.messages.orEmpty()
@@ -178,6 +272,70 @@ class Wristbound private constructor(context: Context) {
 
     private fun rememberReplies(raw: List<HermesMessage>) = synchronized(replies) {
         SessionMapper.replies(raw).forEach { r -> replies[r.id] = Reply(Text.forWatch(r.message.text), r.audio) }
+    }
+
+    // -- recent audio ---------------------------------------------------------------------------
+
+    /**
+     * Send the Recent audio list. The saved list goes first, so the watch shows something at
+     * once; with [refresh] it is then rebuilt from Hermes (see [AudioInbox] for the window).
+     */
+    suspend fun pushAudio(refresh: Boolean) {
+        sendAudioPages(state.loadAudio())
+        if (!refresh) return
+        val api = api()
+        if (api == null) {
+            watch.send(WatchCodec.status(Protocol.Conn.NOT_CONFIGURED, "Set up phone app"))
+            return
+        }
+        try {
+            val sessions = fetchSessions(api)
+                .filter { it.archived != true && it.hidden != true && it.is_internal_child != true }
+                .sortedByDescending { it.activity }
+                .take(AudioInbox.SESSIONS)
+            val found = coroutineScope {
+                val limit = Semaphore(4)
+                sessions.map { s ->
+                    async {
+                        limit.withPermit {
+                            val raw = runCatching { api.recentMessages(s.id, AudioInbox.MESSAGES) }
+                                .onFailure { if (it is CancellationException) throw it }
+                                .getOrNull() ?: return@withPermit emptyList()
+                            rememberReplies(raw)
+                            AudioInbox.collect(s, raw)
+                        }
+                    }
+                }.awaitAll().flatten()
+            }
+            val items = inboxMutex.withLock { AudioInbox.merge(state.loadAudio(), found).also { state.saveAudio(it) } }
+            sendAudioPages(items)
+        } catch (e: IOException) {
+            watch.send(WatchCodec.status(Protocol.Conn.OFFLINE, "Offline - cached"))
+        }
+    }
+
+    /** Add audio replies found in one session's transcript; refresh the watch if any were new. */
+    private suspend fun noteAudio(session: HermesSession?, raw: List<HermesMessage>) {
+        if (session == null) return
+        val found = AudioInbox.collect(session, raw)
+        if (found.isEmpty()) return
+        val changed = inboxMutex.withLock {
+            val before = state.loadAudio()
+            val after = AudioInbox.merge(before, found)
+            (after != before).also { if (it) state.saveAudio(after) }
+        }
+        if (changed && watchOpen) sendAudioPages(state.loadAudio())
+    }
+
+    private suspend fun sendAudioPages(items: List<AudioItem>) {
+        val visible = AudioInbox.visible(items, settings.includeTelegram, Protocol.MAX_AUDIO)
+        val seen = state.lastSeen()
+        val pages = if (visible.isEmpty()) listOf(WatchCodec.audioPage(0, 0, null, false))
+        else visible.mapIndexed { i, item ->
+            val isNew = !state.isHeard(item.messageId) && item.timestamp > (seen[item.sessionId] ?: 0.0) + 0.001
+            WatchCodec.audioPage(i, visible.size, item, isNew)
+        }
+        watch.sendAll(pages)
     }
 
     // -- submissions ----------------------------------------------------------------------------
@@ -279,6 +437,7 @@ class Wristbound private constructor(context: Context) {
         val raw = runCatching { api.recentMessages(sessionId, 20) }.getOrNull() ?: return
         rememberReplies(raw)
         val session = sessionsById[sessionId] ?: HermesSession(sessionId, title = title)
+        noteAudio(session, raw)
         alerts.turnFinished(session, raw)
     }
 
@@ -290,30 +449,50 @@ class Wristbound private constructor(context: Context) {
         openSessionId = state.openSessionId,
     )
 
-    /** Show one decided alert: on the open watchapp, otherwise as a phone notification. */
-    private suspend fun deliverAlert(alert: ReplyAlert) {
+    /**
+     * Show one decided alert: on the open watchapp, otherwise as a phone notification (which
+     * the Pebble mirrors). Returns whether it reached the user: the watch acknowledged the card,
+     * or a notification was posted. A watch that does not acknowledge is treated as closed, so
+     * a missed close event cannot swallow alerts, and the phone notification is used instead.
+     */
+    private suspend fun deliverAlert(alert: ReplyAlert): Boolean {
         val sessionId = alert.sessionId
-        sessionsById[sessionId]?.let { if (state.openSessionId == sessionId && watchOpen) state.markSeen(sessionId, it.activity) }
-        if (watchOpen) {
-            // The watch's message list picks up late audio on its next refresh.
-            if (!alert.silent) sendReplyToWatch(sessionId, alert.messageId)
-        } else {
-            notifier.reply(sessionId, alert.messageId, alert.title, Text.forWatch(alert.text), settings.privatePreviews, alert.hasAudio, alert.silent)
+        if (alert.silent) {
+            // Audio arrived for a reply that already alerted. The watch's message list picks it
+            // up on its next refresh; a notification is updated without alerting again.
+            if (!watchOpen) notifier.reply(sessionId, alert.messageId, alert.title, Text.forWatch(alert.text), settings.privatePreviews, alert.hasAudio, true)
+            return true
         }
+        if (watchOpen) {
+            if (sendReplyToWatch(sessionId, alert.messageId, alert.text, alert.hasAudio)) {
+                Log.i(TAG, "alert ${alert.messageId}: shown on watch")
+                sessionsById[sessionId]?.let { if (state.openSessionId == sessionId) state.markSeen(sessionId, it.activity) }
+                return true
+            }
+            Log.w(TAG, "alert ${alert.messageId}: watch did not acknowledge; treating the watchapp as closed")
+            setWatchOpen(false)
+        }
+        val posted = notifier.reply(sessionId, alert.messageId, alert.title, Text.forWatch(alert.text), settings.privatePreviews, alert.hasAudio, false)
+        Log.i(TAG, "alert ${alert.messageId}: " + if (posted) "phone notification posted" else "not delivered (notifications blocked)")
+        return posted
     }
 
-    private suspend fun sendReplyToWatch(sessionId: String, messageId: String) {
-        val text = textFor(sessionId, messageId) ?: return
+    /** Show one reply as a card on the watch. True when the watch acknowledged it. */
+    private suspend fun sendReplyToWatch(
+        sessionId: String, messageId: String, fallbackText: String? = null, hasAudio: Boolean? = null, requested: Boolean = false,
+    ): Boolean {
+        val reply = replyFor(sessionId, messageId)
+        val text = reply?.text ?: fallbackText?.let(Text::forWatch) ?: return false
+        val audio = hasAudio ?: reply?.audio?.isNotEmpty() ?: false
         val title = sessionsById[sessionId]?.displayTitle ?: "Hermes"
-        watch.send(WatchCodec.reply(sessionId, title, WatchMessage(messageId, Protocol.Role.ASSISTANT, 0, text), textBudget))
+        var flags = if (audio) Protocol.MessageFlag.HAS_AUDIO else 0
+        if (requested) flags = flags or Protocol.MessageFlag.REQUESTED
+        return watch.send(WatchCodec.reply(sessionId, title, WatchMessage(messageId, Protocol.Role.ASSISTANT, flags, text), textBudget))
     }
 
     /** Notification action "Read on watch": open the watchapp, then show this reply once it says hello. */
     suspend fun openReplyOnWatch(sessionId: String, messageId: String) {
-        if (watchOpen) {
-            sendReplyToWatch(sessionId, messageId)
-            return
-        }
+        if (watchOpen && sendReplyToWatch(sessionId, messageId)) return
         pendingReply = sessionId to messageId
         state.openSessionId = sessionId
         watch.startApp()
@@ -321,7 +500,43 @@ class Wristbound private constructor(context: Context) {
 
     suspend fun openWatchApp(): Boolean = watch.startApp()
 
-    // -- background polling ---------------------------------------------------------------------
+    // -- reply monitoring -----------------------------------------------------------------------
+
+    /**
+     * Replies from other surfaces (Telegram, Ringbearer, desktop) are found by polling. One loop
+     * runs while the watchapp is open, and also while it is closed when background sync is on
+     * (the foreground service keeps the process alive for that). Every transition goes through
+     * here, so there is never more than one loop.
+     */
+    @Synchronized
+    fun updateMonitoring() {
+        val wanted = settings.isConfigured && (watchOpen || settings.backgroundSync)
+        if (wanted && monitor?.isActive != true) {
+            Log.i(TAG, "reply monitoring on")
+            monitor = scope.launch {
+                while (isActive) {
+                    pollOnce()
+                    delay(pollIntervalSeconds() * 1000L)
+                }
+            }
+        } else if (!wanted && monitor != null) {
+            Log.i(TAG, "reply monitoring off")
+            monitor?.cancel()
+            monitor = null
+        }
+    }
+
+    /** How often replies are checked right now: faster while the watchapp is open. */
+    fun pollIntervalSeconds(): Int =
+        if (watchOpen) minOf(settings.pollSeconds, FOREGROUND_POLL_SECONDS) else settings.pollSeconds
+
+    /** What reply monitoring is doing, for the setup screen. */
+    fun monitoringSummary(): String = when {
+        !settings.isConfigured -> "Off until you sign in."
+        watchOpen -> "Checking every ${pollIntervalSeconds()} s while the watchapp is open."
+        settings.backgroundSync -> "Checking every ${settings.pollSeconds} s in the background."
+        else -> "Paused: checks run while the watchapp is open, or always with background checking on."
+    }
 
     /**
      * One background check for replies that arrived through other paths (Telegram, Ringbearer,
@@ -336,7 +551,10 @@ class Wristbound private constructor(context: Context) {
             return@withLock
         }
         val moved = alerts.poll(sessions, busy = { activeTurns.containsKey(it) }) { id ->
-            api.recentMessages(id, 20).also { rememberReplies(it) }
+            api.recentMessages(id, 20).also {
+                rememberReplies(it)
+                noteAudio(sessionsById[id], it)
+            }
         }
         if (moved.isNotEmpty() && watchOpen) {
             pushSessions()
@@ -381,11 +599,10 @@ class Wristbound private constructor(context: Context) {
         else playback.play(messageId, Text.forSpeech(reply.text), allowSpeaker)
     }
 
-    private suspend fun textFor(sessionId: String, messageId: String): String? = replyFor(sessionId, messageId)?.text
-
     private suspend fun replyFor(sessionId: String, messageId: String): Reply? {
         synchronized(replies) { replies[messageId] }?.let { return it }
-        val raw = runCatching { api()?.recentMessages(sessionId, 40) }.getOrNull() ?: return null
+        // Wide enough for anything the Recent audio list can show.
+        val raw = runCatching { api()?.recentMessages(sessionId, AudioInbox.MESSAGES) }.getOrNull() ?: return null
         rememberReplies(raw)
         return synchronized(replies) { replies[messageId] }
     }
@@ -405,6 +622,7 @@ class Wristbound private constructor(context: Context) {
         private const val DUPLICATE_WINDOW_MS = 15_000L
         private const val NEW_SESSION_TARGET = "\u0000new"
         private const val MAX_AUDIO_FILES = 24
+        const val FOREGROUND_POLL_SECONDS = 30
 
         @Volatile private var instance: Wristbound? = null
 

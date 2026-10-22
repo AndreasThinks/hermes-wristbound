@@ -39,6 +39,8 @@ sealed class Credentials {
 interface CredentialStore {
     fun load(): Credentials?
     fun save(credentials: Credentials?)
+    /** The dashboard ended the sign-in (a dead refresh token), as opposed to the user signing out. */
+    fun expire() = save(null)
 }
 
 /** The user rejected or abandoned sign-in, or the dashboard refused the credentials. */
@@ -74,12 +76,12 @@ class DashboardAuth(
 
     suspend fun status(): DashboardStatus = withContext(Dispatchers.IO) {
         val body = http.newCall(Request.Builder().url(url("api/status")).build()).execute().use(HermesHttp::body)
-        json.decodeFromString(DashboardStatus.serializer(), body)
+        HermesHttp.decode(DashboardStatus.serializer(), body, "a status")
     }
 
     suspend fun providers(): List<AuthProvider> = withContext(Dispatchers.IO) {
         val body = http.newCall(Request.Builder().url(url("api/auth/providers")).build()).execute().use(HermesHttp::body)
-        json.decodeFromString(AuthProviderList.serializer(), body).providers
+        HermesHttp.decode(AuthProviderList.serializer(), body, "a provider list").providers
     }
 
     fun useSessionToken(token: String) = store.save(Credentials.SessionToken(token.trim()))
@@ -145,7 +147,7 @@ class DashboardAuth(
                 .post(payload.toString().toRequestBody(HermesHttp.JSON_MEDIA)).build()
             val tokens = http.newCall(request).execute().use { response ->
                 if (response.code == 400) throw SignInException("Sign-in expired; try again")
-                json.decodeFromString(NativeTokens.serializer(), HermesHttp.body(response))
+                HermesHttp.decode(NativeTokens.serializer(), HermesHttp.body(response), "sign-in tokens")
             }
             store.save(Credentials.Native(tokens))
             tokens
@@ -170,11 +172,11 @@ class DashboardAuth(
         return http.newCall(request).execute().use { response ->
             when {
                 response.isSuccessful -> {
-                    val tokens = json.decodeFromString(NativeTokens.serializer(), response.body?.string().orEmpty())
+                    val tokens = HermesHttp.decode(NativeTokens.serializer(), response.body?.string().orEmpty(), "sign-in tokens")
                     Credentials.Native(tokens).also { store.save(it) }
                 }
                 // The refresh token is dead: sign-in is needed again. 5xx keeps the tokens.
-                response.code == 401 -> { store.save(null); null }
+                response.code == 401 -> { store.expire(); null }
                 else -> throw HermesHttp.error(response)
             }
         }

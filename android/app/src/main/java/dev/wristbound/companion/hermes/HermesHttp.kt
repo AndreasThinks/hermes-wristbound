@@ -1,5 +1,7 @@
 package dev.wristbound.companion.hermes
 
+import kotlinx.serialization.DeserializationStrategy
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -15,6 +17,13 @@ class HermesHttpException(val status: Int, val code: String?, message: String) :
     val isAuth: Boolean get() = status == 401 || status == 403
 }
 
+/**
+ * Hermes answered, but with a body Wristbound cannot read: a malformed or unexpected payload.
+ * An [IOException] so it takes the same handled paths as a network failure, but reported as
+ * a Hermes problem rather than as being offline.
+ */
+class HermesProtocolException(message: String, cause: Throwable? = null) : IOException(message, cause)
+
 /** Shared HTTP plumbing for the dashboard client and its sign-in flows. */
 object HermesHttp {
     val JSON_MEDIA = "application/json".toMediaType()
@@ -24,6 +33,15 @@ object HermesHttp {
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
+
+    /** Decode a Hermes response, turning a malformed body into a [HermesProtocolException]. */
+    fun <T> decode(deserializer: DeserializationStrategy<T>, body: String, what: String): T = try {
+        json.decodeFromString(deserializer, body)
+    } catch (e: SerializationException) {
+        throw HermesProtocolException("Hermes sent $what Wristbound could not read", e)
+    } catch (e: IllegalArgumentException) {
+        throw HermesProtocolException("Hermes sent $what Wristbound could not read", e)
+    }
 
     fun body(response: Response): String {
         if (!response.isSuccessful) throw error(response)

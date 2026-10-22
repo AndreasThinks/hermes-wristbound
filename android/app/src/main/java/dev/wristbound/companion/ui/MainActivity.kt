@@ -3,10 +3,16 @@ package dev.wristbound.companion.ui
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings as AndroidSettings
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AdapterView
@@ -17,129 +23,102 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.view.ContextThemeWrapper
 import androidx.appcompat.widget.SwitchCompat
+import androidx.appcompat.widget.Toolbar
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import dev.wristbound.companion.R
+import dev.wristbound.companion.core.Account
 import dev.wristbound.companion.core.NotifyScope
 import dev.wristbound.companion.core.ToolActivity
 import dev.wristbound.companion.core.Wristbound
 import dev.wristbound.companion.hermes.Credentials
+import dev.wristbound.companion.hermes.DashboardAuth
+import dev.wristbound.companion.hermes.DashboardClient
+import dev.wristbound.companion.hermes.Endpoint
 import dev.wristbound.companion.hermes.HermesHttpException
+import dev.wristbound.companion.hermes.HermesProtocolException
 import dev.wristbound.companion.hermes.LoopbackReceiver
 import dev.wristbound.companion.hermes.SignInException
+import dev.wristbound.companion.notify.Notifier
 import dev.wristbound.companion.sync.SyncService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import java.io.IOException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import javax.net.ssl.SSLException
 
-/** Setup screen: Hermes connection, notification preferences and background sync. */
+/**
+ * Setup screen: Hermes account and connection, watch, playback, notifications and background
+ * checking. Signed out, it shows the sign-in options; signed in, an account card instead, so a
+ * working sign-in is never next to a form inviting another one.
+ */
 class MainActivity : AppCompatActivity() {
     private val controller by lazy { Wristbound.get(this) }
+    private val pad by lazy { (16 * resources.displayMetrics.density).toInt() }
+
+    private lateinit var signedOutGroup: LinearLayout
+    private lateinit var signedInGroup: LinearLayout
+    private lateinit var accountHeading: TextView
+    private lateinit var accountDetail: TextView
+    private lateinit var accountConnection: TextView
+    private lateinit var watchStatus: TextView
+    private lateinit var monitoring: TextView
+    private lateinit var notificationStatus: TextView
+    private lateinit var notificationButton: Button
+    private lateinit var url: EditText
     private lateinit var status: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // The toolbar is drawn under the status bar in Wristbound blue, so its icons stay light.
+        enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT))
         super.onCreate(savedInstanceState)
         val s = controller.settings
-        val pad = (16 * resources.displayMetrics.density).toInt()
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad, pad, pad)
+            setPadding(pad, 0, pad, pad)
         }
 
-        column.addView(heading("Hermes connection"))
-        column.addView(note("Wristbound talks to the Hermes dashboard, like the desktop app and Hermes-Relay, so Telegram and desktop sessions can be read and continued. Use the dashboard address on your tailnet, e.g. https://hermes.tailnet-name.ts.net:10443 (tailscale serve in front of port 9119)."))
-        val url = EditText(this).apply {
-            hint = "Hermes dashboard URL"
-            inputType = InputType.TYPE_TEXT_VARIATION_URI
-            setText(s.baseUrl)
-        }
-        column.addView(url)
-        status = note(connectionSummary())
+        column.addView(heading("Hermes"))
+        signedInGroup = accountCard()
+        column.addView(signedInGroup)
+        signedOutGroup = signInForm()
+        column.addView(signedOutGroup)
+        status = note("")
         column.addView(status)
 
-        column.addView(note("Signed-in dashboards: sign in with your dashboard username and password, or in the browser for other providers."))
-        val user = EditText(this).apply {
-            hint = "Username"
-            inputType = InputType.TYPE_CLASS_TEXT
-        }
-        val pass = EditText(this).apply {
-            hint = "Password"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-        }
-        column.addView(user)
-        column.addView(pass)
-        column.addView(Button(this).apply {
-            text = "Sign in"
-            setOnClickListener {
-                s.baseUrl = url.text.toString()
-                val u = user.text.toString()
-                val p = pass.text.toString()
-                pass.text.clear()
-                signInWithPassword(u, p)
-            }
-        })
-        column.addView(Button(this).apply {
-            text = "Sign in with browser"
-            setOnClickListener {
-                s.baseUrl = url.text.toString()
-                signInWithBrowser()
-            }
-        })
-
-        column.addView(note("Loopback dashboards (no sign-in page): paste the session token the desktop app sets as HERMES_DASHBOARD_SESSION_TOKEN."))
-        val token = EditText(this).apply {
-            hint = "Session token"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-        }
-        column.addView(token)
-        column.addView(Button(this).apply {
-            text = "Use session token"
-            setOnClickListener {
-                s.baseUrl = url.text.toString()
-                val t = token.text.toString()
-                token.text.clear()
-                val auth = controller.client()?.auth
-                when {
-                    auth == null -> status.text = "Invalid URL."
-                    t.isBlank() -> status.text = "Enter the token."
-                    else -> {
-                        auth.useSessionToken(t)
-                        testConnection()
-                    }
-                }
-            }
-        })
-        column.addView(Button(this).apply {
-            text = "Test connection"
-            setOnClickListener {
-                s.baseUrl = url.text.toString()
-                testConnection()
-            }
-        })
-        column.addView(Button(this).apply {
-            text = "Sign out"
-            setOnClickListener {
-                controller.client()?.auth?.signOut()
-                status.text = connectionSummary()
-            }
-        })
-
         column.addView(heading("Watch"))
+        watchStatus = note("")
+        column.addView(watchStatus)
         column.addView(switch("Show Telegram sessions", s.includeTelegram) { s.includeTelegram = it })
         column.addView(switch("Allow replies to Telegram sessions", s.allowTelegramReplies) { s.allowTelegramReplies = it })
         column.addView(note("Off keeps Telegram sessions read-only on the watch: you can still read and play replies, and answer in Telegram."))
         column.addView(switch("Show tool activity on watch", s.toolActivity != ToolActivity.HIDDEN) {
             s.toolActivity = if (it) ToolActivity.SILENT else ToolActivity.HIDDEN
         })
-        column.addView(Button(this).apply {
-            text = "Open Wristbound on watch"
-            setOnClickListener { lifecycleScope.launch { controller.openWatchApp() } }
-        })
+        column.addView(button("Open Wristbound on watch") { lifecycleScope.launch { controller.openWatchApp() } })
 
         column.addView(heading("Playback"))
         column.addView(switch("Use Hermes' voice", s.hermesVoice) { s.hermesVoice = it })
         column.addView(note("Replies with audio Hermes generated play that audio. Other replies are spoken in the voice set under tts: in Hermes, or by the phone when this is off or Hermes cannot speak."))
 
         column.addView(heading("Notifications"))
+        notificationStatus = note("")
+        column.addView(notificationStatus)
+        notificationButton = button("Allow notifications") { fixNotifications() }
+        column.addView(notificationButton)
         column.addView(switch("Notify final replies", s.notifyReplies) { s.notifyReplies = it })
         column.addView(switch("Also notify for Telegram sessions", s.notifyTelegram) { s.notifyTelegram = it })
         column.addView(switch("Notify Telegram replies with Hermes audio", s.notifyTelegramAudio) { s.notifyTelegramAudio = it })
@@ -153,113 +132,312 @@ class MainActivity : AppCompatActivity() {
             s.notifyScope = if (it == 0) NotifyScope.ALL_ELIGIBLE else NotifyScope.OPEN_SESSION
         })
 
-        column.addView(heading("Background"))
-        column.addView(note("Keeps Wristbound running while the phone is locked so replies arrive with the watchapp closed. Shows a silent ongoing notification."))
-        column.addView(switch("Watch for replies in background", s.backgroundSync) {
+        column.addView(heading("Checking for replies"))
+        monitoring = note("")
+        column.addView(monitoring)
+        column.addView(note("Replies that arrive through Telegram, Ringbearer or the desktop are checked for every ${Wristbound.FOREGROUND_POLL_SECONDS} s while the watchapp is open. Background checking keeps going while the watchapp is closed and the phone is locked, with a silent ongoing notification. The first check after signing in only notes what is already there, so old conversations never alert."))
+        column.addView(switch("Keep checking in the background", s.backgroundSync) {
             s.backgroundSync = it
             if (it) SyncService.start(this) else SyncService.stop(this)
+            controller.updateMonitoring()
+            render()
         })
         val pollChoices = listOf(30, 60, 120, 300)
-        column.addView(spinner("Check every", pollChoices.map { "$it seconds" }, pollChoices.indexOf(s.pollSeconds).coerceAtLeast(1)) {
+        column.addView(spinner("Background check every", pollChoices.map { "$it seconds" }, pollChoices.indexOf(s.pollSeconds).coerceAtLeast(1)) {
             s.pollSeconds = pollChoices[it]
+            render()
         })
 
         column.addView(heading("Privacy"))
-        column.addView(Button(this).apply {
-            text = "Clear cached conversations"
-            setOnClickListener {
-                controller.state.clearCache()
-                status.text = "Cache cleared."
-            }
+        column.addView(button("Clear cached conversations") {
+            controller.state.clearCache()
+            status.text = "Cache cleared."
         })
 
-        setContentView(ScrollView(this).apply { addView(column) })
+        setContentView(screen(column))
         requestNotificationPermission()
         if (s.backgroundSync) SyncService.start(this)
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                controller.backend.collect { render() }
+            }
+        }
     }
 
-    private fun connectionSummary(): String = when (controller.settings.load()) {
-        is Credentials.Native -> "Signed in."
-        is Credentials.SessionToken -> "Using a session token."
-        null -> if (controller.settings.baseUrl.isBlank()) "Not configured." else "Not signed in."
+    override fun onResume() {
+        super.onResume()
+        render()
+        if (controller.settings.isConfigured) checkConnection(quiet = true)
+    }
+
+    // -- layout ---------------------------------------------------------------------------------
+
+    /**
+     * A toolbar that stays put above a scrolling form. Edge-to-edge is on (and enforced from
+     * Android 15), so the system bars are kept clear with their real insets: the toolbar takes
+     * the status bar and cutout, the form takes the navigation bar or the keyboard.
+     */
+    private fun screen(content: View): View {
+        val toolbar = Toolbar(ContextThemeWrapper(this, androidx.appcompat.R.style.ThemeOverlay_AppCompat_Dark_ActionBar)).apply {
+            title = getString(R.string.app_name)
+            setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.wristbound_blue))
+        }
+        val scroll = ScrollView(this).apply {
+            id = R.id.setup_scroll
+            clipToPadding = false
+            isFillViewport = true
+            addView(content)
+        }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(toolbar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        }
+        setSupportActionBar(toolbar)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            toolbar.updatePadding(left = bars.left, top = bars.top, right = bars.right)
+            scroll.updatePadding(left = bars.left, right = bars.right, bottom = maxOf(bars.bottom, ime.bottom))
+            WindowInsetsCompat.CONSUMED
+        }
+        return root
+    }
+
+    private fun accountCard(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(pad, pad / 2, pad, pad / 2)
+        background = GradientDrawable().apply {
+            cornerRadius = pad / 2f
+            setStroke((resources.displayMetrics.density * 1.5f).toInt(), ContextCompat.getColor(this@MainActivity, R.color.card_stroke))
+        }
+        accountHeading = TextView(this@MainActivity).apply { textSize = 17f }
+        accountDetail = note("")
+        accountConnection = note("")
+        addView(accountHeading)
+        addView(accountDetail)
+        addView(accountConnection)
+        addView(button("Test connection") { checkConnection(quiet = false) })
+        addView(button("Sign out") { confirmSignOut() })
+    }
+
+    private fun signInForm(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        addView(note("Wristbound talks to the Hermes dashboard, like the desktop app and Hermes-Relay, so Telegram and desktop sessions can be read and continued. Use the dashboard address on your tailnet, e.g. https://hermes.tailnet-name.ts.net:10443 (tailscale serve in front of port 9119)."))
+        url = EditText(this@MainActivity).apply {
+            id = R.id.setup_url
+            hint = "Hermes dashboard URL"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            setText(controller.settings.baseUrl)
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(s: Editable?) {
+                    error = (Endpoint.validate(s?.toString().orEmpty()) as? Endpoint.Check.Invalid)
+                        ?.takeIf { s?.isNotBlank() == true }?.reason
+                }
+            })
+        }
+        addView(url)
+
+        addView(subheading("Sign in"))
+        addView(note("Dashboards with a sign-in page: use your dashboard username and password, or sign in in the browser for other providers."))
+        val user = EditText(this@MainActivity).apply {
+            id = R.id.setup_username
+            hint = "Username"
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        val pass = EditText(this@MainActivity).apply {
+            hint = "Password"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            isSaveEnabled = false
+        }
+        addView(user)
+        addView(pass)
+        addView(button("Sign in") {
+            val p = pass.text.toString()
+            pass.text.clear()
+            signInWithPassword(user.text.toString(), p)
+        })
+        addView(button("Sign in with browser") { signInWithBrowser() })
+
+        addView(subheading("Advanced: session token"))
+        addView(note("Only for a dashboard on a loopback bind with no sign-in page: paste the token the desktop app sets as HERMES_DASHBOARD_SESSION_TOKEN."))
+        val token = EditText(this@MainActivity).apply {
+            id = R.id.setup_token
+            hint = "Session token"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            isSaveEnabled = false
+        }
+        addView(token)
+        addView(button("Use session token") {
+            val t = token.text.toString()
+            token.text.clear()
+            useSessionToken(t)
+        })
+    }
+
+    // -- state ----------------------------------------------------------------------------------
+
+    /** Draw everything from saved state and the last backend result; safe to call any time. */
+    private fun render() {
+        if (!::status.isInitialized) return
+        val s = controller.settings
+        val view = Account.view(s.credentials, s.baseUrl, s.signInExpired, controller.backend.value)
+        signedInGroup.visibility = if (view.signedIn) View.VISIBLE else View.GONE
+        signedOutGroup.visibility = if (view.signedIn) View.GONE else View.VISIBLE
+        accountHeading.text = view.heading
+        accountDetail.text = view.detail
+        accountConnection.text = "Hermes: ${view.connection}"
+        if (!view.signedIn && s.signInExpired && status.text.isBlank()) status.text = view.connection
+        watchStatus.text = if (controller.watchOpen) "Watchapp: open" else "Watchapp: closed"
+        monitoring.text = controller.monitoringSummary()
+        val canNotify = Notifier(this).canPost()
+        notificationStatus.text = if (canNotify) "Notifications: allowed"
+        else "Notifications: blocked. Replies cannot reach the watch while the watchapp is closed."
+        notificationButton.visibility = if (canNotify) View.GONE else View.VISIBLE
+    }
+
+    /** The address in the form, if it is valid; otherwise says why and returns null. */
+    private fun draftEndpoint(): String? = when (val check = Endpoint.validate(url.text.toString())) {
+        is Endpoint.Check.Valid -> check.url
+        is Endpoint.Check.Invalid -> {
+            url.error = check.reason
+            status.text = check.reason
+            null
+        }
+    }
+
+    /**
+     * Sign in to [endpoint] with credentials bound to it. The active dashboard only changes once
+     * [block] has succeeded, so a failed sign-in to a mistyped address leaves everything as it was.
+     */
+    private fun signIn(stage: String, progress: String, block: suspend (DashboardAuth) -> Unit) {
+        val endpoint = draftEndpoint() ?: return
+        val auth = DashboardAuth(endpoint, controller.settings.credentialsFor(endpoint))
+        status.text = progress
+        lifecycleScope.launch {
+            try {
+                block(auth)
+                activate(endpoint)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logFailure(stage, e)
+                status.text = describe(e, endpoint)
+            }
+        }
+    }
+
+    private fun activate(endpoint: String) {
+        controller.settings.baseUrl = endpoint
+        controller.onCredentialsChanged()
+        status.text = ""
+        render()
+        checkConnection(quiet = false)
     }
 
     private fun signInWithPassword(username: String, password: String) {
-        val auth = controller.client()?.auth ?: run { status.text = "Invalid URL."; return }
         if (username.isBlank() || password.isBlank()) {
             status.text = "Enter a username and password."
             return
         }
-        status.text = "Signing in..."
-        lifecycleScope.launch {
-            try {
-                val dashboard = auth.status()
-                if (!dashboard.auth_required) {
-                    status.text = "This dashboard has no sign-in page. Use its session token instead."
-                    return@launch
-                }
-                val provider = auth.providers().firstOrNull { it.supports_password }
-                if (provider == null) {
-                    status.text = "This dashboard has no password sign-in. Use Sign in with browser."
-                    return@launch
-                }
-                auth.signInWithPassword(provider.name, username, password)
-                testConnection()
-            } catch (e: Exception) {
-                status.text = describe(e)
-            }
+        signIn("password", "Signing in...") { auth ->
+            requireSignInPage(auth)
+            val provider = auth.providers().firstOrNull { it.supports_password }
+                ?: throw SignInException("This dashboard has no password sign-in. Use Sign in with browser.")
+            auth.signInWithPassword(provider.name, username, password)
         }
     }
 
-    private fun signInWithBrowser() {
-        val auth = controller.client()?.auth ?: run { status.text = "Invalid URL."; return }
-        status.text = "Finish signing in in the browser..."
-        lifecycleScope.launch {
-            try {
-                val dashboard = auth.status()
-                if (!dashboard.auth_required) {
-                    status.text = "This dashboard has no sign-in page. Use its session token instead."
-                    return@launch
-                }
-                val receiver = LoopbackReceiver()
-                val pending = auth.beginBrowserSignIn(receiver.redirectUri)
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(pending.url)))
-                val result = receiver.await()
-                auth.completeBrowserSignIn(pending, result.code, result.state)
-                testConnection()
-            } catch (e: Exception) {
-                status.text = describe(e)
-            }
+    private fun signInWithBrowser() = signIn("browser", "Finish signing in in the browser...") { auth ->
+        requireSignInPage(auth)
+        val receiver = LoopbackReceiver()
+        val pending = auth.beginBrowserSignIn(receiver.redirectUri)
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(pending.url)))
+        val result = receiver.await()
+        auth.completeBrowserSignIn(pending, result.code, result.state)
+    }
+
+    private suspend fun requireSignInPage(auth: DashboardAuth) {
+        if (!auth.status().auth_required) {
+            throw SignInException("This dashboard has no sign-in page. Use its session token instead.")
         }
     }
 
-    private fun testConnection() {
-        val s = controller.settings
-        if (!s.isConfigured) {
-            status.text = if (s.baseUrl.isBlank()) "Enter the dashboard URL." else "Sign in first."
+    /** Check the token against the dashboard before saving it, so a bad one changes nothing. */
+    private fun useSessionToken(token: String) {
+        if (token.isBlank()) {
+            status.text = "Enter the token."
             return
         }
-        status.text = "Testing..."
-        lifecycleScope.launch {
-            status.text = try {
-                val client = controller.client() ?: throw IllegalArgumentException()
-                val sessions = client.listSessions(20)
-                // Prove the gateway socket too: that is what sends replies.
-                client.openGateway().close()
-                controller.pushSessions()
-                val telegram = sessions.count { it.isTelegram }
-                "Connected. ${sessions.size} recent sessions, $telegram from Telegram."
-            } catch (e: Exception) {
-                describe(e)
+        signIn("session token", "Checking the token...") { auth ->
+            val probe = object : dev.wristbound.companion.hermes.CredentialStore {
+                override fun load() = Credentials.SessionToken(token.trim())
+                override fun save(credentials: Credentials?) {}
             }
+            DashboardClient(DashboardAuth(auth.base.toString(), probe)).listSessions(1)
+            auth.useSessionToken(token)
         }
     }
 
-    private fun describe(e: Exception): String = when (e) {
-        is SignInException -> e.message.orEmpty()
-        is HermesHttpException -> if (e.isAuth) "Hermes rejected the sign-in. Sign in again." else "Hermes error: ${e.message}"
-        is IllegalArgumentException -> "Invalid URL."
-        else -> "Cannot reach Hermes: ${e.message}. Is Tailscale connected?"
+    private fun checkConnection(quiet: Boolean) {
+        if (!quiet) status.text = "Testing..."
+        lifecycleScope.launch {
+            try {
+                val (total, telegram) = controller.checkConnection()
+                controller.pushSessions()
+                if (!quiet) status.text = "Connected. $total recent sessions, $telegram from Telegram."
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logFailure("connection test", e)
+                if (!quiet) status.text = describe(e, controller.settings.baseUrl)
+            }
+            render()
+        }
+    }
+
+    private fun confirmSignOut() {
+        AlertDialog.Builder(this)
+            .setTitle("Sign out of Hermes?")
+            .setMessage("The watch stops showing sessions and replies until you sign in again.")
+            .setPositiveButton("Sign out") { _, _ ->
+                val s = controller.settings
+                s.credentialsFor(s.baseUrl).save(null)
+                s.signInExpired = false
+                controller.onCredentialsChanged()
+                status.text = "Signed out."
+                render()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Record where and how a sign-in or check failed, without any secret or server text. */
+    private fun logFailure(stage: String, e: Exception) {
+        val http = (e as? HermesHttpException)?.let { " HTTP ${it.status}" }.orEmpty()
+        Log.w(TAG, "$stage failed: ${e.javaClass.simpleName}$http")
+    }
+
+    private fun describe(e: Exception, endpoint: String): String {
+        val host = runCatching { Uri.parse(endpoint).host }.getOrNull() ?: "the dashboard"
+        return when (e) {
+            is SignInException -> e.message.orEmpty()
+            is HermesHttpException -> when {
+                e.isAuth -> "Hermes rejected the sign-in. Check the username, password or token."
+                e.status in 300..399 -> "Hermes redirected the request. Use the dashboard's final address (usually https://)."
+                e.status == 404 -> "No Hermes dashboard at that address. Check the port (usually 9119, or your tailscale serve port)."
+                else -> "Hermes error: ${e.message}"
+            }
+            is HermesProtocolException -> "That address answered, but not like a Hermes dashboard. Check the port (usually 9119, or your tailscale serve port)."
+            is UnknownHostException -> "Cannot find $host. Is Tailscale connected?"
+            is SSLException -> "Secure connection to $host failed. Check whether the address should be https:// or http://."
+            is ConnectException, is SocketTimeoutException -> "Cannot reach $host. Is Tailscale connected and the dashboard running?"
+            is IOException -> "Cannot reach Hermes: ${e.message}"
+            else -> "Unexpected problem (${e.javaClass.simpleName})."
+        }
     }
 
     private fun requestNotificationPermission() {
@@ -270,15 +448,42 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        render()
+    }
+
+    /** Ask again, or open the app's notification settings once Android stops asking. */
+    private fun fixNotifications() {
+        if (Build.VERSION.SDK_INT >= 33 && shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
+            requestNotificationPermission()
+            return
+        }
+        startActivity(Intent(AndroidSettings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(AndroidSettings.EXTRA_APP_PACKAGE, packageName))
+    }
+
+    // -- widgets --------------------------------------------------------------------------------
+
     private fun heading(text: String) = TextView(this).apply {
         this.text = text
         textSize = 18f
         setPadding(0, (20 * resources.displayMetrics.density).toInt(), 0, 4)
     }
 
+    private fun subheading(text: String) = TextView(this).apply {
+        this.text = text
+        textSize = 15f
+        setPadding(0, (12 * resources.displayMetrics.density).toInt(), 0, 2)
+    }
+
     private fun note(text: String) = TextView(this).apply {
         this.text = text
         textSize = 13f
+    }
+
+    private fun button(label: String, onClick: () -> Unit) = Button(this).apply {
+        text = label
+        setOnClickListener { onClick() }
     }
 
     private fun switch(label: String, checked: Boolean, onChange: (Boolean) -> Unit) = SwitchCompat(this).apply {
@@ -300,5 +505,9 @@ class MainActivity : AppCompatActivity() {
             }
         })
         return row
+    }
+
+    private companion object {
+        const val TAG = "WristboundSetup"
     }
 }

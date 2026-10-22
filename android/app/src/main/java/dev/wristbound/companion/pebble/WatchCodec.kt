@@ -1,5 +1,6 @@
 package dev.wristbound.companion.pebble
 
+import dev.wristbound.companion.core.AudioItem
 import dev.wristbound.companion.core.WatchMessage
 import dev.wristbound.companion.core.WatchSession
 import dev.wristbound.companion.pebble.Protocol.Key
@@ -18,6 +19,8 @@ sealed class WatchCommand {
     data object Pause : WatchCommand()
     data object Resume : WatchCommand()
     data object Stop : WatchCommand()
+    data class ListAudio(val includeTelegram: Boolean) : WatchCommand()
+    data class OpenReply(val sessionId: String, val messageId: String) : WatchCommand()
 }
 
 /** Pure encoding/decoding between the protocol and PebbleKit dictionaries. */
@@ -63,6 +66,12 @@ object WatchCodec {
             Protocol.Cmd.PAUSE -> WatchCommand.Pause
             Protocol.Cmd.RESUME -> WatchCommand.Resume
             Protocol.Cmd.STOP -> WatchCommand.Stop
+            Protocol.Cmd.LIST_AUDIO -> WatchCommand.ListAudio((int(Key.FILTER) ?: 1) != 0)
+            Protocol.Cmd.OPEN_REPLY -> {
+                val sid = str(Key.SESSION_ID)?.takeIf { it.isNotEmpty() } ?: return null
+                val mid = str(Key.MESSAGE_ID)?.takeIf { it.isNotEmpty() } ?: return null
+                WatchCommand.OpenReply(sid, mid)
+            }
             else -> null
         }
     }
@@ -92,6 +101,24 @@ object WatchCodec {
                 put(Key.TEXT, PebbleDictionaryItem.Text(body))
             }
         }
+
+    /** One Recent audio row. [item] null with total 0 means an empty list. */
+    fun audioPage(index: Int, total: Int, item: AudioItem?, isNew: Boolean): PebbleDictionary = buildMap {
+        put(Key.TYPE, u8(Protocol.Type.AUDIO))
+        put(Key.INDEX, u8(index))
+        put(Key.TOTAL, u8(total))
+        if (item != null) {
+            var flags = 0
+            if (isNew) flags = flags or Protocol.AudioFlag.NEW
+            if (item.telegram) flags = flags or Protocol.AudioFlag.TELEGRAM
+            put(Key.SESSION_ID, text(item.sessionId, Protocol.SESSION_ID_BUDGET))
+            put(Key.MESSAGE_ID, text(item.messageId, Protocol.MESSAGE_ID_BUDGET))
+            put(Key.TITLE, text(item.sessionTitle, Protocol.TITLE_BUDGET))
+            put(Key.TEXT, text(item.preview, Protocol.PREVIEW_BUDGET))
+            put(Key.FLAGS, u8(flags))
+            put(Key.TIME, PebbleDictionaryItem.UInt32(item.timestamp.toLong().coerceIn(0, UInt.MAX_VALUE.toLong()).toUInt()))
+        }
+    }
 
     fun status(state: Protocol.Conn, detail: String): PebbleDictionary = mapOf(
         Key.TYPE to u8(Protocol.Type.STATUS),
