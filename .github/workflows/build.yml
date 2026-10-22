@@ -1,0 +1,46 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - name: Install Pebble SDK
+        run: |
+          uv tool install pebble-tool
+          yes | pebble sdk install latest
+      - name: Build watchapp
+        working-directory: watch
+        run: pebble build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: watch-pbw
+          path: watch/build/watch.pbw
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      # The runner image ships the Android SDK; install the platform PebbleKit 2 needs.
+      - name: Install SDK platform
+        run: |
+          SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -1)
+          yes | "$SDKMANAGER" "platforms;android-37.0" "build-tools;37.0.0" > /dev/null
+          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+      - name: Test and build
+        working-directory: android
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: companion-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk

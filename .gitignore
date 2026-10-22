@@ -26,3 +26,7 @@ media-cache/
 *.sqlite
 *.sqlite3
 .DS_Store
+
+# Pebble SDK (waf)
+.lock-waf*
+watch/screenshots/

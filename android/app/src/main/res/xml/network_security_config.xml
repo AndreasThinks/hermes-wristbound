@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext is refused except to Tailscale MagicDNS names, where WireGuard already encrypts the
+  link. HTTPS is still preferred: "tailscale serve" can front Hermes with a tailnet certificate
+  while Hermes itself stays bound to loopback.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">ts.net</domain>
+    </domain-config>
+</network-security-config>

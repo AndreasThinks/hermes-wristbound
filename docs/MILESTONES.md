@@ -1,8 +1,14 @@
 # Milestones and acceptance
 
+## Status (October 2026)
+
+- **Milestone 1** is done from source: [HERMES_API.md](HERMES_API.md) records the dashboard routes, gateway calls, authentication and remaining limits, and [TESTING.md](TESTING.md) is the device test plan. The findings still need confirming against a running Hermes.
+- **Milestone 2** client is built: watchapp and Android companion cover items 1 to 7 in code. The companion uses the Hermes dashboard and its gateway socket, as the desktop app does, so Telegram-origin sessions can be continued and replies play Hermes' own audio. None of the acceptance steps has been run on real hardware yet.
+- **Milestone 3** items partly in code: reconnect catch-up by polling, at-most-once submission with uncertain outcomes, notification deduplication, separate visibility and alert preferences, bounded cache and media-free storage. Untested on devices.
+
 ## 0. Documentation-only starting point
 
-This repository records the proposal. No app implementation, installed APK/PBW, deployment changes or passing runtime tests are implied.
+The repository began as the proposal only.
 
 ## 1. Capability discovery
 
