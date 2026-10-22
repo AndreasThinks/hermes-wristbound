@@ -5,22 +5,40 @@ A Pebble watchapp and Android companion for using [Hermes Agent](https://github.
 **Status: first vertical slice built, not yet tested on real devices.** The watchapp builds for every Pebble platform and runs in the emulator against a scripted phone; the Android companion builds and passes its unit tests. Nothing has been run against a real Hermes, phone or watch yet; see [docs/TESTING.md](docs/TESTING.md).
 
 <p>
+  <img src="docs/screenshots/splash.png" width="144" alt="Launch screen: the Hermes girl in green and violet pixels over the Wristbound name">
   <img src="docs/screenshots/sessions.png" width="144" alt="Main menu: Recent audio (1 new), New session, then the session list">
   <img src="docs/screenshots/recent-audio.png" width="144" alt="Recent audio: audio replies from any session, newest first, with age and a preview">
   <img src="docs/screenshots/session.png" width="144" alt="An open session, newest message first, with a Reply row on top">
   <img src="docs/screenshots/reply.png" width="144" alt="A full Hermes reply">
   <img src="docs/screenshots/actions.png" width="144" alt="Reply actions: Play, Play on phone speaker, Replay from start">
   <img src="docs/screenshots/compose.png" width="144" alt="Compose: Dictate, or a quick reply such as Yes, No, Continue">
-  <img src="docs/screenshots/working.png" width="144" alt="A sent reply showing Hermes is working">
+  <img src="docs/screenshots/working.png" width="144" alt="A sent reply showing Hermes is working, with a block cursor">
 </p>
 
 <p>
+  <img src="docs/screenshots/chalk-splash.png" width="144" alt="Launch screen on the round Pebble Time Round">
   <img src="docs/screenshots/chalk-sessions.png" width="144" alt="Session list on the round Pebble Time Round">
   <img src="docs/screenshots/chalk-session.png" width="144" alt="An open session on the round screen">
   <img src="docs/screenshots/chalk-reply.png" width="144" alt="A reply flowing within the round screen">
 </p>
 
 *Basalt (Pebble Time) and Chalk (Pebble Time Round) emulators, driven by the scripted phone in `watch/tools/fake_phone.py`; the conversation is canned.*
+
+### Look and feel
+
+Wristbound's look is called *Phosphor*: black glass, green (`#00FFAA`) for anything you can act on, and violet (`#AA55FF`) whenever Hermes is speaking. Fixed labels such as section headers use a bundled pixel font (Silkscreen); Hermes' own text stays in Pebble's Gothic, so every character it sends can be shown. Audio replies carry a waveform. A reply that arrives while the app is open comes in like a radio tuning in: the waveform rises, then the text types itself out in under half a second, and any button skips to the end.
+
+Each kind of event has its own vibration, so the wrist alone tells them apart:
+
+| Event | Pattern | ms on / off |
+|-------|---------|-------------|
+| Text reply | dot | 50 |
+| Reply with audio | dot dot dash | 50 · 100 · 50 · 100 · 250 |
+| Needs you: failed, outcome unknown, read-only, no headphones | dash dash dash | 250 · 150 · 250 · 150 · 250 |
+| Sent | double blip | 30 · 60 · 30 |
+| A press that does nothing (no microphone, read-only Reply) | dot | 50 |
+
+Black-and-white watches draw every accent in white. The original Pebble (Aplite) keeps the stock menu cells in these colours, without the waveform, the intro or the launch screen: its 24 KB is shared by code and heap, and the menus need the heap more.
 
 ## How it works
 

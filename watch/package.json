@@ -43,7 +43,35 @@
       "Time"
     ],
     "resources": {
-      "media": []
+      "media": [
+        {
+          "type": "font",
+          "name": "FONT_PIXEL_8",
+          "file": "fonts/Silkscreen-Regular.ttf",
+          "characterRegex": "[ -~]",
+          "targetPlatforms": [
+            "basalt",
+            "chalk",
+            "diorite",
+            "emery",
+            "flint",
+            "gabbro"
+          ]
+        },
+        {
+          "type": "bitmap",
+          "name": "IMAGE_SPLASH",
+          "file": "images/splash.png",
+          "targetPlatforms": [
+            "basalt",
+            "chalk",
+            "diorite",
+            "emery",
+            "flint",
+            "gabbro"
+          ]
+        }
+      ]
     },
     "companionApp": {
       "android": {
