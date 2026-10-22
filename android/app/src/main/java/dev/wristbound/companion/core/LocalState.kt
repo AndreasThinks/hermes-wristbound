@@ -49,6 +49,13 @@ class LocalState(context: Context) : AlertStore {
         return true
     }
 
+    @Synchronized
+    override fun unmarkAlerted(key: String) {
+        val list = readList("notified")
+        if (key !in list) return
+        prefs.edit().putString("notified", json.encodeToString(ListSerializer(String.serializer()), list - key)).commit()
+    }
+
     override var pollCursors: PollCursors?
         @Synchronized get() = prefs.getString("poll_cursors", null)?.let {
             runCatching { json.decodeFromString(PollCursors.serializer(), it) }.getOrNull()

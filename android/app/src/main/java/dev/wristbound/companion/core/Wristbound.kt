@@ -23,6 +23,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -64,6 +66,7 @@ class Wristbound private constructor(context: Context) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Reply>?) = size > 64
     }
     private val pollMutex = Mutex()
+    private var monitor: Job? = null
     private val alerts = ReplyAlerts(state, ::alertPolicy) { deliverAlert(it) }
     private val audioDir = File(app.cacheDir, "audio").apply { mkdirs() }
 
@@ -83,18 +86,22 @@ class Wristbound private constructor(context: Context) {
 
     // -- watch lifecycle ------------------------------------------------------------------------
 
-    fun onWatchAppOpened() {
-        watchOpen = true
-    }
+    fun onWatchAppOpened() = setWatchOpen(true)
 
-    fun onWatchAppClosed() {
-        watchOpen = false
+    fun onWatchAppClosed() = setWatchOpen(false)
+
+    private fun setWatchOpen(open: Boolean) {
+        if (watchOpen == open) return
+        watchOpen = open
+        Log.i(TAG, if (open) "watchapp open" else "watchapp closed")
+        updateMonitoring()
     }
 
     suspend fun onWatchCommand(cmd: WatchCommand) {
+        // Any command proves the watchapp is open, even if the open event was missed.
+        setWatchOpen(true)
         when (cmd) {
             is WatchCommand.Hello -> {
-                watchOpen = true
                 textBudget = cmd.textBudget.coerceIn(64, 4000)
                 settings.includeTelegram = cmd.includeTelegram
                 if (cmd.protoVersion != Protocol.VERSION) {
@@ -306,30 +313,47 @@ class Wristbound private constructor(context: Context) {
         openSessionId = state.openSessionId,
     )
 
-    /** Show one decided alert: on the open watchapp, otherwise as a phone notification. */
-    private suspend fun deliverAlert(alert: ReplyAlert) {
+    /**
+     * Show one decided alert: on the open watchapp, otherwise as a phone notification (which
+     * the Pebble mirrors). Returns whether it reached the user: the watch acknowledged the card,
+     * or a notification was posted. A watch that does not acknowledge is treated as closed, so
+     * a missed close event cannot swallow alerts, and the phone notification is used instead.
+     */
+    private suspend fun deliverAlert(alert: ReplyAlert): Boolean {
         val sessionId = alert.sessionId
-        sessionsById[sessionId]?.let { if (state.openSessionId == sessionId && watchOpen) state.markSeen(sessionId, it.activity) }
-        if (watchOpen) {
-            // The watch's message list picks up late audio on its next refresh.
-            if (!alert.silent) sendReplyToWatch(sessionId, alert.messageId)
-        } else {
-            notifier.reply(sessionId, alert.messageId, alert.title, Text.forWatch(alert.text), settings.privatePreviews, alert.hasAudio, alert.silent)
+        if (alert.silent) {
+            // Audio arrived for a reply that already alerted. The watch's message list picks it
+            // up on its next refresh; a notification is updated without alerting again.
+            if (!watchOpen) notifier.reply(sessionId, alert.messageId, alert.title, Text.forWatch(alert.text), settings.privatePreviews, alert.hasAudio, true)
+            return true
         }
+        if (watchOpen) {
+            if (sendReplyToWatch(sessionId, alert.messageId, alert.text, alert.hasAudio)) {
+                Log.i(TAG, "alert ${alert.messageId}: shown on watch")
+                sessionsById[sessionId]?.let { if (state.openSessionId == sessionId) state.markSeen(sessionId, it.activity) }
+                return true
+            }
+            Log.w(TAG, "alert ${alert.messageId}: watch did not acknowledge; treating the watchapp as closed")
+            setWatchOpen(false)
+        }
+        val posted = notifier.reply(sessionId, alert.messageId, alert.title, Text.forWatch(alert.text), settings.privatePreviews, alert.hasAudio, false)
+        Log.i(TAG, "alert ${alert.messageId}: " + if (posted) "phone notification posted" else "not delivered (notifications blocked)")
+        return posted
     }
 
-    private suspend fun sendReplyToWatch(sessionId: String, messageId: String) {
-        val text = textFor(sessionId, messageId) ?: return
+    /** Show one reply as a card on the watch. True when the watch acknowledged it. */
+    private suspend fun sendReplyToWatch(sessionId: String, messageId: String, fallbackText: String? = null, hasAudio: Boolean? = null): Boolean {
+        val reply = replyFor(sessionId, messageId)
+        val text = reply?.text ?: fallbackText?.let(Text::forWatch) ?: return false
+        val audio = hasAudio ?: reply?.audio?.isNotEmpty() ?: false
         val title = sessionsById[sessionId]?.displayTitle ?: "Hermes"
-        watch.send(WatchCodec.reply(sessionId, title, WatchMessage(messageId, Protocol.Role.ASSISTANT, 0, text), textBudget))
+        val flags = if (audio) Protocol.MessageFlag.HAS_AUDIO else 0
+        return watch.send(WatchCodec.reply(sessionId, title, WatchMessage(messageId, Protocol.Role.ASSISTANT, flags, text), textBudget))
     }
 
     /** Notification action "Read on watch": open the watchapp, then show this reply once it says hello. */
     suspend fun openReplyOnWatch(sessionId: String, messageId: String) {
-        if (watchOpen) {
-            sendReplyToWatch(sessionId, messageId)
-            return
-        }
+        if (watchOpen && sendReplyToWatch(sessionId, messageId)) return
         pendingReply = sessionId to messageId
         state.openSessionId = sessionId
         watch.startApp()
@@ -337,7 +361,43 @@ class Wristbound private constructor(context: Context) {
 
     suspend fun openWatchApp(): Boolean = watch.startApp()
 
-    // -- background polling ---------------------------------------------------------------------
+    // -- reply monitoring -----------------------------------------------------------------------
+
+    /**
+     * Replies from other surfaces (Telegram, Ringbearer, desktop) are found by polling. One loop
+     * runs while the watchapp is open, and also while it is closed when background sync is on
+     * (the foreground service keeps the process alive for that). Every transition goes through
+     * here, so there is never more than one loop.
+     */
+    @Synchronized
+    fun updateMonitoring() {
+        val wanted = settings.isConfigured && (watchOpen || settings.backgroundSync)
+        if (wanted && monitor?.isActive != true) {
+            Log.i(TAG, "reply monitoring on")
+            monitor = scope.launch {
+                while (isActive) {
+                    pollOnce()
+                    delay(pollIntervalSeconds() * 1000L)
+                }
+            }
+        } else if (!wanted && monitor != null) {
+            Log.i(TAG, "reply monitoring off")
+            monitor?.cancel()
+            monitor = null
+        }
+    }
+
+    /** How often replies are checked right now: faster while the watchapp is open. */
+    fun pollIntervalSeconds(): Int =
+        if (watchOpen) minOf(settings.pollSeconds, FOREGROUND_POLL_SECONDS) else settings.pollSeconds
+
+    /** What reply monitoring is doing, for the setup screen. */
+    fun monitoringSummary(): String = when {
+        !settings.isConfigured -> "Off until you sign in."
+        watchOpen -> "Checking every ${pollIntervalSeconds()} s while the watchapp is open."
+        settings.backgroundSync -> "Checking every ${settings.pollSeconds} s in the background."
+        else -> "Paused: checks run while the watchapp is open, or always with background checking on."
+    }
 
     /**
      * One background check for replies that arrived through other paths (Telegram, Ringbearer,
@@ -397,8 +457,6 @@ class Wristbound private constructor(context: Context) {
         else playback.play(messageId, Text.forSpeech(reply.text), allowSpeaker)
     }
 
-    private suspend fun textFor(sessionId: String, messageId: String): String? = replyFor(sessionId, messageId)?.text
-
     private suspend fun replyFor(sessionId: String, messageId: String): Reply? {
         synchronized(replies) { replies[messageId] }?.let { return it }
         val raw = runCatching { api()?.recentMessages(sessionId, 40) }.getOrNull() ?: return null
@@ -421,6 +479,7 @@ class Wristbound private constructor(context: Context) {
         private const val DUPLICATE_WINDOW_MS = 15_000L
         private const val NEW_SESSION_TARGET = "\u0000new"
         private const val MAX_AUDIO_FILES = 24
+        const val FOREGROUND_POLL_SECONDS = 30
 
         @Volatile private var instance: Wristbound? = null
 

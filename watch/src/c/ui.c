@@ -190,6 +190,7 @@ typedef enum {
   ACT_REPLAY,
   ACT_STOP,
   ACT_OPEN_SESSION,
+  ACT_REPLY,
   ACT_DISMISS,
 } MessageAction;
 
@@ -236,10 +237,17 @@ static void prv_msg_action(ActionMenu *menu, const ActionMenuItem *item, void *c
     case ACT_REPLAY: comm_replay(s_msg_session_id, s_msg_id); break;
     case ACT_STOP: comm_simple(CMD_STOP); break;
     case ACT_OPEN_SESSION:
+    case ACT_REPLY:
       strncpy(g_model.open_session_id, s_msg_session_id, SESSION_ID_LEN - 1);
       g_model.open_session_title[0] = '\0';
+      g_model.open_session_flags = 0;
       window_stack_remove(s_msg_window, false);
       prv_open_session_window();
+      // Replying needs the session's own policy: a read-only session opens without the composer,
+      // and its Reply row says why.
+      if (act == ACT_REPLY && !(g_model.open_session_flags & SESSION_FLAG_READ_ONLY)) {
+        prv_open_compose(COMPOSE_REPLY);
+      }
       break;
     case ACT_DISMISS:
       window_stack_remove(s_msg_window, true);
@@ -256,7 +264,7 @@ static void prv_msg_select(ClickRecognizerRef rec, void *ctx) {
     return; // only assistant replies are playable
   }
   bool playing_this = strcmp(g_model.playback_message_id, s_msg_id) == 0;
-  ActionMenuLevel *root = action_menu_level_create(7);
+  ActionMenuLevel *root = action_menu_level_create(8);
   if (playing_this && g_model.playback == PLAYBACK_PLAYING) {
     action_menu_level_add_action(root, "Pause", prv_msg_action, (void *)ACT_PAUSE);
     action_menu_level_add_action(root, "Stop", prv_msg_action, (void *)ACT_STOP);
@@ -269,6 +277,7 @@ static void prv_msg_select(ClickRecognizerRef rec, void *ctx) {
   action_menu_level_add_action(root, "Play on phone speaker", prv_msg_action, (void *)ACT_PLAY_SPEAKER);
   action_menu_level_add_action(root, "Replay from start", prv_msg_action, (void *)ACT_REPLAY);
   if (s_msg_mode == MSG_MODE_REPLY) {
+    action_menu_level_add_action(root, "Reply", prv_msg_action, (void *)ACT_REPLY);
     action_menu_level_add_action(root, "Open session", prv_msg_action, (void *)ACT_OPEN_SESSION);
     action_menu_level_add_action(root, "Dismiss", prv_msg_action, (void *)ACT_DISMISS);
   }
@@ -667,12 +676,9 @@ void ui_session_opened(void) {
 
 void ui_reply_received(const char *session_id, const char *message_id,
                        const char *title, const char *text, uint8_t flags) {
+  // Always show the card, even over the same session's history: it is the one place with Play,
+  // Reply and Open session for this reply. The history behind it refreshes from the phone.
   vibes_short_pulse();
-  bool viewing_session = s_session_window && window_stack_get_top_window() == s_session_window &&
-                         strcmp(session_id, g_model.open_session_id) == 0;
-  if (viewing_session) {
-    return; // history refresh follows from the phone
-  }
   prv_open_message(MSG_MODE_REPLY, session_id, message_id, title[0] ? title : "New reply",
                    ROLE_ASSISTANT, flags, text);
 }

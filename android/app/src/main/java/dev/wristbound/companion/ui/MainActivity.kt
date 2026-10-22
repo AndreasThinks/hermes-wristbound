@@ -158,6 +158,7 @@ class MainActivity : AppCompatActivity() {
         column.addView(switch("Watch for replies in background", s.backgroundSync) {
             s.backgroundSync = it
             if (it) SyncService.start(this) else SyncService.stop(this)
+            controller.updateMonitoring()
         })
         val pollChoices = listOf(30, 60, 120, 300)
         column.addView(spinner("Check every", pollChoices.map { "$it seconds" }, pollChoices.indexOf(s.pollSeconds).coerceAtLeast(1)) {
