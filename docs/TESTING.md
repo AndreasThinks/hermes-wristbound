@@ -32,7 +32,7 @@ pebble emu-button push select --emulator basalt; sleep 1; pebble emu-button rele
 
 ### Screenshots
 
-The screenshots in the README and `docs/screenshots/` come from this harness on basalt, with `pebble screenshot --no-open --emulator basalt docs/screenshots/<name>.png`:
+The screenshots in the README and `docs/screenshots/` come from this harness on basalt and chalk, with `pebble screenshot --no-open --emulator basalt docs/screenshots/<name>.png`:
 
 | File | Buttons from the session list |
 |------|-------------------------------|
@@ -42,10 +42,11 @@ The screenshots in the README and `docs/screenshots/` come from this harness on 
 | `actions.png` | Select, Select, Select |
 | `compose.png` | Select, Select, Select, Back, Back, Up (to Reply), Select |
 | `working.png`, `received.png` | from compose: Down, Select; shot after 0.5 s and after 4 s |
+| `chalk-sessions.png`, `chalk-session.png`, `chalk-reply.png` | as above, on `--emulator chalk` |
 
 On a headless Linux machine, start a virtual display first (`Xvfb :99 &` and `export DISPLAY=:99`), since QEMU opens an SDL window. In containers without IPv6, pypkjs fails to listen (`Address family not supported`) and `pebble install` reports `Connection refused`; binding its WebSocket server to `0.0.0.0` instead of `""` in `pypkjs/runner/websocket.py` works around it.
 
-Checked on basalt and aplite this way: session list with unread, Telegram and read-only labels; the Telegram toggle; opening a session (newest first); reading a reply; the action menu; Play without headphones reporting "No headphones"; Play on phone speaker; a quick reply moving through working to completed.
+Checked on basalt and aplite this way: session list with unread, Telegram and read-only labels; the Telegram toggle; opening a session (newest first); reading a reply; the action menu; Play without headphones reporting "No headphones"; Play on phone speaker; a quick reply moving through working to completed. On chalk (round), the session list, session view and reply view were checked for text cut off at the screen edge.
 
 ## Not yet tested: real devices
 

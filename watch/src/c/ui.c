@@ -4,6 +4,8 @@
 
 #define DICTATION_LEN 256
 #define STATUS_H 22
+// Round screens inset text by flowing it; a fixed inset would add to that.
+#define TEXT_INSET PBL_IF_ROUND_ELSE(0, 4)
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -62,6 +64,19 @@ static const char *prv_role_label(uint8_t role) {
     case ROLE_TOOL: return "Tool";
     default: return "System";
   }
+}
+
+// The stock header is left-aligned, which the round screen's edge cuts off; centre it there.
+static void prv_header_draw(GContext *ctx, const Layer *cell, const char *text) {
+#if defined(PBL_ROUND)
+  GRect bounds = layer_get_bounds(cell);
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+                     GRect(0, -1, bounds.size.w, bounds.size.h), GTextOverflowModeTrailingEllipsis,
+                     GTextAlignmentCenter, NULL);
+#else
+  menu_cell_basic_header_draw(ctx, cell, text);
+#endif
 }
 
 static void prv_menu_colors(MenuLayer *menu) {
@@ -203,7 +218,7 @@ static void prv_msg_update_status(void) {
 static void prv_msg_layout(void) {
   Layer *root = window_get_root_layer(s_msg_window);
   GRect bounds = layer_get_bounds(root);
-  GRect text_bounds = GRect(4, 0, bounds.size.w - 8, 4000);
+  GRect text_bounds = GRect(TEXT_INSET, 0, bounds.size.w - 2 * TEXT_INSET, 4000);
   text_layer_set_size(s_msg_text, text_bounds.size);
   GSize content = text_layer_get_content_size(s_msg_text);
   content.h += 12;
@@ -294,15 +309,16 @@ static void prv_msg_load(Window *window) {
   scroll_layer_set_paging(s_msg_scroll, true);
 #endif
 
-  s_msg_text = text_layer_create(GRect(4, 0, bounds.size.w - 8, 4000));
+  s_msg_text = text_layer_create(GRect(TEXT_INSET, 0, bounds.size.w - 2 * TEXT_INSET, 4000));
   text_layer_set_font(s_msg_text, fonts_get_system_font(FONT_KEY_GOTHIC_24));
   text_layer_set_text(s_msg_text, s_msg_body ? s_msg_body : "");
   text_layer_set_overflow_mode(s_msg_text, GTextOverflowModeWordWrap);
-#if defined(PBL_ROUND)
-  text_layer_enable_screen_text_flow_and_paging(s_msg_text, 4);
-#endif
   scroll_layer_add_child(s_msg_scroll, text_layer_get_layer(s_msg_text));
   layer_add_child(root, scroll_layer_get_layer(s_msg_scroll));
+#if defined(PBL_ROUND)
+  // Text flow only takes effect once the layer is in the window's hierarchy.
+  text_layer_enable_screen_text_flow_and_paging(s_msg_text, 4);
+#endif
 
   prv_msg_layout();
   prv_msg_update_status();
@@ -373,7 +389,7 @@ static int16_t prv_session_header_h(MenuLayer *menu, uint16_t section, void *ctx
 
 static void prv_session_header(GContext *ctx, const Layer *cell, uint16_t section, void *data) {
   const char *title = g_model.open_session_title[0] ? g_model.open_session_title : "Session";
-  menu_cell_basic_header_draw(ctx, cell, title);
+  prv_header_draw(ctx, cell, title);
 }
 
 static void prv_session_draw(GContext *ctx, const Layer *cell, MenuIndex *idx, void *data) {
@@ -495,7 +511,7 @@ static int16_t prv_main_header_h(MenuLayer *menu, uint16_t section, void *ctx) {
 }
 
 static void prv_main_header(GContext *ctx, const Layer *cell, uint16_t section, void *data) {
-  menu_cell_basic_header_draw(ctx, cell, section == 0 ? prv_conn_label() : "Actions");
+  prv_header_draw(ctx, cell, section == 0 ? prv_conn_label() : "Actions");
 }
 
 static void prv_session_subtitle(const Session *s, char *buf, size_t len) {

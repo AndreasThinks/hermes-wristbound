@@ -13,7 +13,13 @@ A Pebble watchapp and Android companion for using [Hermes Agent](https://github.
   <img src="docs/screenshots/working.png" width="144" alt="A sent reply showing Hermes is working">
 </p>
 
-*Basalt emulator, driven by the scripted phone in `watch/tools/fake_phone.py`; the conversation is canned.*
+<p>
+  <img src="docs/screenshots/chalk-sessions.png" width="144" alt="Session list on the round Pebble Time Round">
+  <img src="docs/screenshots/chalk-session.png" width="144" alt="An open session on the round screen">
+  <img src="docs/screenshots/chalk-reply.png" width="144" alt="A reply flowing within the round screen">
+</p>
+
+*Basalt (Pebble Time) and Chalk (Pebble Time Round) emulators, driven by the scripted phone in `watch/tools/fake_phone.py`; the conversation is canned.*
 
 ## How it works
 
