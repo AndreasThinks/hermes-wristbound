@@ -157,13 +157,15 @@ class MainActivity : AppCompatActivity() {
             note("Off by default: those apps already notify your phone."),
             switch("Background & scheduled tasks", s.alertBackground) { s.alertBackground = it },
             note("Cron jobs and automation sessions, and Hermes following up on its own background work."),
+            switch("Open Wristbound for alerts", s.openForAlerts) { s.openForAlerts = it },
+            note("Shows the alert as Wristbound's own banner, even while another app or the watchface is showing. Left alone, it closes again. Off: a phone notification the Pebble mirrors."),
         )
         column.addView(switch("Notifications", s.notifyReplies) { on ->
             s.notifyReplies = on
             kinds.forEach { it.isEnabled = on }
         })
         kinds.forEach { it.isEnabled = s.notifyReplies; column.addView(it) }
-        column.addView(note("Alerts show on the open watchapp, or as a phone notification the Pebble mirrors. Nothing plays until you press Play."))
+        column.addView(note("Alerts show on the open watchapp, otherwise as a phone notification the Pebble mirrors, unless Wristbound is set to open for them. Nothing plays until you press Play."))
         column.addView(switch("Notify when Hermes uses a tool", s.toolActivity == ToolActivity.NOTIFY) {
             s.toolActivity = if (it) ToolActivity.NOTIFY else ToolActivity.SILENT
         })
