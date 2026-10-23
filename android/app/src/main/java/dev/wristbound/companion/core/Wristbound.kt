@@ -2,7 +2,6 @@ package dev.wristbound.companion.core
 
 import android.content.Context
 import android.util.Log
-import dev.wristbound.companion.hermes.AudioClip
 import dev.wristbound.companion.hermes.DashboardAuth
 import dev.wristbound.companion.hermes.DashboardClient
 import dev.wristbound.companion.hermes.Endpoint
@@ -585,10 +584,9 @@ class Wristbound private constructor(context: Context) {
     // -- playback -------------------------------------------------------------------------------
 
     /**
-     * Play one exact reply. In order: audio Hermes attached to it (its text-to-speech tool
-     * output), then the reply text spoken again in Hermes' configured voice (newly generated,
-     * not the voice note Telegram may have received), then the phone's voice. [speaker] plays it
-     * on the phone's own speaker; otherwise only on headphones.
+     * Play the audio Hermes attached to one exact reply (its text-to-speech tool output). A reply
+     * without audio is never read aloud. [speaker] plays it on the phone's own speaker; otherwise
+     * only on headphones.
      */
     suspend fun play(sessionId: String, messageId: String, speaker: Boolean) {
         val reply = replyFor(sessionId, messageId)
@@ -596,27 +594,26 @@ class Wristbound private constructor(context: Context) {
             onPlaybackState(messageId, Protocol.Playback.ERROR, "Reply not found")
             return
         }
+        if (reply.audio.isEmpty()) {
+            onPlaybackState(messageId, Protocol.Playback.ERROR, "No Hermes audio for this reply")
+            return
+        }
         if (!speaker && !playback.hasPrivateOutput()) {
             onPlaybackState(messageId, Protocol.Playback.NEEDS_SPEAKER, "No headphones")
             return
         }
         val api = api()
-        var clip: Pair<AudioClip, String>? = null
-        if (api != null && reply.audio.isNotEmpty()) {
-            onPlaybackState(messageId, Protocol.Playback.IDLE, "Getting Hermes audio")
-            clip = reply.audio.firstNotNullOfOrNull { path ->
-                runCatching { api.fetchAudio(path, audioDir) }.onFailure { Log.d(TAG, "audio fetch failed: ${it.message}") }.getOrNull()
-            }?.let { it to "Playing Hermes audio" }
+        if (api == null) {
+            onPlaybackState(messageId, Protocol.Playback.ERROR, "Set up phone app")
+            return
         }
-        if (clip == null && api != null && settings.hermesVoice) {
-            onPlaybackState(messageId, Protocol.Playback.IDLE, "Getting Hermes voice")
-            clip = runCatching { api.speak(Text.forSpeech(reply.text), messageId, audioDir) }
-                .onFailure { Log.d(TAG, "Hermes voice failed: ${it.message}") }.getOrNull()
-                ?.let { it to "Hermes voice, read again" }
+        onPlaybackState(messageId, Protocol.Playback.IDLE, "Getting Hermes audio")
+        val clip = reply.audio.firstNotNullOfOrNull { path ->
+            runCatching { api.fetchAudio(path, audioDir) }.onFailure { Log.d(TAG, "audio fetch failed: ${it.message}") }.getOrNull()
         }
         pruneAudio()
-        if (clip != null) playback.playFile(messageId, clip.first.file, speaker, clip.second)
-        else playback.play(messageId, Text.forSpeech(reply.text), speaker)
+        if (clip != null) playback.playFile(messageId, clip.file, speaker, "Playing Hermes audio")
+        else onPlaybackState(messageId, Protocol.Playback.ERROR, "Could not get the audio")
     }
 
     // -- watch speaker ----------------------------------------------------------------------------
@@ -624,8 +621,8 @@ class Wristbound private constructor(context: Context) {
     /**
      * Play one exact reply on the watch's own speaker. The watch has no codec, so the reply's
      * Hermes audio is decoded here and sent as 8 kHz PCM that the watch pulls as it has room.
-     * Only that reply's own audio is used, or Hermes' voice reading it again (labelled so);
-     * never the phone or headphones, and a failure is reported to the watch, not rerouted.
+     * Only that reply's own audio is used, never the phone or headphones, and a failure is
+     * reported to the watch, not rerouted.
      */
     private suspend fun playOnWatch(sessionId: String, messageId: String, chunk: Int) {
         suspend fun fail(reason: String) {
@@ -636,24 +633,17 @@ class Wristbound private constructor(context: Context) {
         val (pcm, label) = cached ?: run {
             val api = api() ?: return fail("Set up phone app")
             val reply = replyFor(sessionId, messageId) ?: return fail("Reply not found")
-            var source: Pair<AudioClip, String>? = reply.audio.firstNotNullOfOrNull { path ->
+            if (reply.audio.isEmpty()) return fail("No Hermes audio for this reply")
+            val source = reply.audio.firstNotNullOfOrNull { path ->
                 runCatching { api.fetchAudio(path, audioDir) }.onFailure { Log.d(TAG, "audio fetch failed: ${it.message}") }.getOrNull()
-            }?.let { it to "Hermes audio" }
-            if (source == null && reply.audio.isEmpty() && settings.hermesVoice) {
-                source = runCatching { api.speak(Text.forSpeech(reply.text), messageId, audioDir) }
-                    .onFailure { Log.d(TAG, "Hermes voice failed: ${it.message}") }.getOrNull()
-                    ?.let { it to "Hermes voice, read again" }
-            }
-            if (source == null) {
-                return fail(if (reply.audio.isEmpty()) "No Hermes audio for this reply" else "Could not get the audio")
-            }
+            } ?: return fail("Could not get the audio")
             pruneAudio()
             val converted = try {
                 withContext(Dispatchers.Default) {
-                    val decoded = AudioDecoder.decode(source.first.file)
+                    val decoded = AudioDecoder.decode(source.file)
                     val seconds = decoded.samples.size / decoded.channels / decoded.sampleRate
                     val suffix = if (seconds >= PcmConverter.MAX_SECONDS) " (first 2 min)" else ""
-                    PcmConverter.forWatch(decoded.samples, decoded.sampleRate, decoded.channels) to source.second + suffix
+                    PcmConverter.forWatch(decoded.samples, decoded.sampleRate, decoded.channels) to "Hermes audio$suffix"
                 }
             } catch (e: IOException) {
                 return fail("Cannot convert this audio")

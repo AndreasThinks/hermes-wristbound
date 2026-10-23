@@ -56,7 +56,7 @@ class Notifier(private val context: Context) {
             hasAudio && !text.contains("[audio]") -> "[audio] $text"
             else -> text
         }
-        val n = NotificationCompat.Builder(context, CH_REPLIES)
+        val builder = NotificationCompat.Builder(context, CH_REPLIES)
             .setSmallIcon(R.drawable.ic_notification)
             // Phosphor's accents: violet when Hermes speaks, green otherwise.
             .setColor(ContextCompat.getColor(context, if (hasAudio) R.color.phosphor_voice else R.color.phosphor_signal))
@@ -69,11 +69,13 @@ class Notifier(private val context: Context) {
             .setSilent(silent)
             .setAutoCancel(true)
             .setContentIntent(openApp())
-            .addAction(0, "Play", action(ActionReceiver.ACTION_PLAY, sessionId, messageId))
-            .addAction(0, "Play on speaker", action(ActionReceiver.ACTION_PLAY_SPEAKER, sessionId, messageId))
-            .addAction(0, "Read on watch", action(ActionReceiver.ACTION_OPEN_ON_WATCH, sessionId, messageId))
-            .build()
-        return post(messageId.hashCode(), n)
+        // Only a reply with Hermes audio offers Play: text replies are never read aloud.
+        if (hasAudio) {
+            builder.addAction(0, "Play", action(ActionReceiver.ACTION_PLAY, sessionId, messageId))
+                .addAction(0, "Play on speaker", action(ActionReceiver.ACTION_PLAY_SPEAKER, sessionId, messageId))
+        }
+        builder.addAction(0, "Read on watch", action(ActionReceiver.ACTION_OPEN_ON_WATCH, sessionId, messageId))
+        return post(messageId.hashCode(), builder.build())
     }
 
     /**

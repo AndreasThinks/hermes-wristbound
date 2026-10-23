@@ -414,12 +414,16 @@ static void prv_action_menu_closed(ActionMenu *menu, const ActionMenuItem *item,
 
 static void prv_msg_select(ClickRecognizerRef rec, void *ctx) {
   prv_intro_finish();
-  if (s_msg_role != ROLE_ASSISTANT && s_msg_mode != MSG_MODE_REPLY) {
-    return; // only assistant replies are playable
+  // Only replies that carry Hermes audio are playable: a text reply is never read aloud.
+  bool audio = s_msg_role == ROLE_ASSISTANT && (s_msg_flags & MESSAGE_FLAG_HAS_AUDIO);
+  if (!audio && s_msg_mode != MSG_MODE_REPLY) {
+    return;
   }
   bool playing_this = strcmp(g_model.playback_message_id, s_msg_id) == 0;
   ActionMenuLevel *root = action_menu_level_create(11);
-  if (playing_this && g_model.playback == PLAYBACK_PLAYING) {
+  if (!audio) {
+    // A text reply card: no playback rows, only Reply, Open session and Dismiss below.
+  } else if (playing_this && g_model.playback == PLAYBACK_PLAYING) {
     action_menu_level_add_action(root, "Pause", prv_msg_action, (void *)ACT_PAUSE);
     action_menu_level_add_action(root, "Stop", prv_msg_action, (void *)ACT_STOP);
   } else if (playing_this && g_model.playback == PLAYBACK_PAUSED) {
@@ -432,7 +436,7 @@ static void prv_msg_select(ClickRecognizerRef rec, void *ctx) {
     }
     action_menu_level_add_action(root, "Play on phone speaker", prv_msg_action, (void *)ACT_PLAY_SPEAKER);
   }
-  if (wspk_supported()) {
+  if (audio && wspk_supported()) {
     // The watch's own speaker: always an explicit choice, never a fallback for the phone route.
     switch (wspk_state_for(s_msg_id)) {
       case WSPK_PREPARING:
@@ -458,7 +462,9 @@ static void prv_msg_select(ClickRecognizerRef rec, void *ctx) {
         break;
     }
   }
-  action_menu_level_add_action(root, "Replay from start", prv_msg_action, (void *)ACT_REPLAY);
+  if (audio) {
+    action_menu_level_add_action(root, "Replay from start", prv_msg_action, (void *)ACT_REPLAY);
+  }
   if (s_msg_mode == MSG_MODE_REPLY) {
     action_menu_level_add_action(root, "Reply", prv_msg_action, (void *)ACT_REPLY);
     action_menu_level_add_action(root, "Open session", prv_msg_action, (void *)ACT_OPEN_SESSION);

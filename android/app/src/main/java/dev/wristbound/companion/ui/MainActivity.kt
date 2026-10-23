@@ -121,10 +121,6 @@ class MainActivity : AppCompatActivity() {
         })
         column.addView(button("Open Wristbound on watch", primary = false) { lifecycleScope.launch { controller.openWatchApp() } })
 
-        column.addView(heading("Playback"))
-        column.addView(switch("Use Hermes' voice", s.hermesVoice) { s.hermesVoice = it })
-        column.addView(note("Replies with audio Hermes generated play that audio. Other replies are spoken in the voice set under tts: in Hermes, or by the phone when this is off or Hermes cannot speak."))
-
         column.addView(heading("Notifications"))
         notificationStatus = note("")
         column.addView(notificationStatus)
