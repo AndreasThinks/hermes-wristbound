@@ -52,7 +52,7 @@ Credentials are encrypted in Android Keystore-backed storage and bound to the is
 
 Install Wristbound through its Pebble Store listing. Alternatively download `wristbound-vX.Y.Z.pbw` from the same GitHub release and open it with the Pebble Android app.
 
-**Use matching phone/watch versions.** Version 0.4.0 uses protocol v4; version 0.5.0 uses protocol v5. Updating only one side can result in an Update watch or phone app warning. Installing a watch update with the same UUID replaces the old version; there is no need to remove it first.
+**Use protocol-compatible phone/watch versions.** Android v0.6.1 is an Android-only notification polish update and works with the v0.6.0 Store watchapp; both use protocol v5. No watch update or uninstall is needed for v0.6.1. Version 0.4.0 uses protocol v4; versions 0.5.0 and 0.6.0 use protocol v5. Updating only one side across a protocol change can result in an Update watch or phone app warning. Installing a watch update with the same UUID replaces the old version; there is no need to remove it first.
 
 Open Wristbound on the watch. The home screen has New session, Continue (the last session), Recent audio and Sessions. A session opens as one scrolling conversation: Select replies by dictation where supported or a quick reply, and a reply shows there as Hermes writes it. Hold Select for playback, Newest and Refresh. Watch options are set in the companion app, under Watch.
 
