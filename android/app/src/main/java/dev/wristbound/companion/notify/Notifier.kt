@@ -8,6 +8,8 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import androidx.core.app.Person
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -23,9 +25,16 @@ class Notifier(private val context: Context) {
 
     init {
         val nm = context.getSystemService(NotificationManager::class.java)
+        // A new channel gives silent defaults without rewriting the old channel's user settings.
+        // Carry an existing block forward so an upgrade cannot silently re-enable replies.
+        val old = nm.getNotificationChannel("replies")
+        val importance = if (old?.importance == NotificationManager.IMPORTANCE_NONE) NotificationManager.IMPORTANCE_NONE
+            else NotificationManager.IMPORTANCE_DEFAULT
         nm.createNotificationChannel(
-            NotificationChannel(CH_REPLIES, "Hermes replies", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Final replies from Hermes"
+            NotificationChannel(CH_REPLIES, "Hermes replies · silent on phone", importance).apply {
+                description = "Native watch replies; no phone sound, vibration or heads-up by default"
+                setSound(null, null)
+                enableVibration(false)
             },
         )
         nm.createNotificationChannel(
@@ -56,31 +65,32 @@ class Notifier(private val context: Context) {
      * audio arrived later) without alerting again. Nothing plays until an action is pressed.
      */
     fun reply(sessionId: String, messageId: String, title: String, text: String, private: Boolean, hasAudio: Boolean, silent: Boolean): Boolean {
-        val body = when {
-            private -> if (hasAudio) "New audio reply" else "New reply"
-            hasAudio && !text.contains("[audio]") -> "[audio] $text"
-            else -> text
-        }
+        val notice = ReplyNotice.create(sessionId, messageId, title, text, private, hasAudio)
+        val sender = Person.Builder().setName(notice.sender).setKey("hermes").setBot(true).build()
+        val style = NotificationCompat.MessagingStyle(Person.Builder().setName("You").build())
+            .setConversationTitle(notice.title)
+            .setGroupConversation(true)
+            .addMessage(notice.body, System.currentTimeMillis(), sender)
         val builder = NotificationCompat.Builder(context, CH_REPLIES)
             .setSmallIcon(R.drawable.ic_notification)
-            // Phosphor's accents: violet when Hermes speaks, green otherwise.
             .setColor(ContextCompat.getColor(context, if (hasAudio) R.color.phosphor_voice else R.color.phosphor_signal))
-            .setContentTitle(title)
-            .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setContentTitle(notice.title)
+            .setContentText(notice.body)
+            .setStyle(style)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setVisibility(if (private) NotificationCompat.VISIBILITY_PRIVATE else NotificationCompat.VISIBILITY_PUBLIC)
             .setOnlyAlertOnce(true)
             .setSilent(silent)
             .setAutoCancel(true)
             .setContentIntent(openApp())
-        // Only a reply with Hermes audio offers Play: text replies are never read aloud.
-        if (hasAudio) {
-            builder.addAction(0, "Play", action(ActionReceiver.ACTION_PLAY, sessionId, messageId))
-                .addAction(0, "Play on speaker", action(ActionReceiver.ACTION_PLAY_SPEAKER, sessionId, messageId))
+        for (item in notice.actions) {
+            builder.addAction(NotificationCompat.Action.Builder(0, item.label, action(item.action, sessionId, messageId))
+                .setShowsUserInterface(item.showsUserInterface).build())
         }
-        builder.addAction(0, "Read on watch", action(ActionReceiver.ACTION_OPEN_ON_WATCH, sessionId, messageId))
-        return post(messageId.hashCode(), builder.build())
+        if (!canPost()) return false
+        // Tag + fixed ID avoids hash collisions and keeps updates on the original native item.
+        manager.notify(notice.key, REPLY_ID, builder.build())
+        return true
     }
 
     /**
@@ -101,7 +111,8 @@ class Notifier(private val context: Context) {
             .setContentIntent(openApp())
         for (choice in choices) {
             val label = APPROVAL_LABELS[choice] ?: continue
-            builder.addAction(0, label, action(ActionReceiver.ACTION_APPROVE, sessionId, requestId, choice))
+            builder.addAction(NotificationCompat.Action.Builder(0, label, action(ActionReceiver.ACTION_APPROVE, sessionId, requestId, choice))
+                .setShowsUserInterface(false).build())
         }
         return post(requestId.hashCode(), builder.build())
     }
@@ -166,6 +177,8 @@ class Notifier(private val context: Context) {
     private fun action(action: String, sessionId: String, messageId: String, choice: String? = null): PendingIntent {
         val intent = Intent(context, ActionReceiver::class.java)
             .setAction(action)
+            .setData(Uri.Builder().scheme("wristbound").authority("notification")
+                .appendPath(sessionId).appendPath(messageId).appendPath(action).appendPath(choice.orEmpty()).build())
             .putExtra(ActionReceiver.EXTRA_SESSION, sessionId)
             .putExtra(ActionReceiver.EXTRA_MESSAGE, messageId)
         choice?.let { intent.putExtra(ActionReceiver.EXTRA_CHOICE, it) }
@@ -176,7 +189,7 @@ class Notifier(private val context: Context) {
     }
 
     companion object {
-        const val CH_REPLIES = "replies"
+        const val CH_REPLIES = "replies_silent_v1"
         const val CH_TOOLS = "tools"
         const val CH_ERRORS = "errors"
         const val CH_SYNC = "sync"
@@ -184,6 +197,7 @@ class Notifier(private val context: Context) {
         const val SYNC_ID = 1
         private const val TOOL_ID = 2
         private const val ERROR_ID = 3
+        private const val REPLY_ID = 4
         /** Pebble shows these as the notification's actions. */
         private val APPROVAL_LABELS = mapOf(
             "once" to "Allow once", "session" to "Allow this session", "always" to "Always allow", "deny" to "Deny",

@@ -28,9 +28,9 @@ class ActionReceiver : BroadcastReceiver() {
     }
 
     companion object {
-        const val ACTION_PLAY = "dev.wristbound.companion.PLAY"
-        const val ACTION_PLAY_SPEAKER = "dev.wristbound.companion.PLAY_SPEAKER"
-        const val ACTION_OPEN_ON_WATCH = "dev.wristbound.companion.OPEN_ON_WATCH"
+        const val ACTION_PLAY = ReplyNotice.ACTION_PLAY
+        const val ACTION_PLAY_SPEAKER = ReplyNotice.ACTION_PLAY_SPEAKER
+        const val ACTION_OPEN_ON_WATCH = ReplyNotice.ACTION_OPEN_ON_WATCH
         const val EXTRA_SESSION = "session_id"
         const val EXTRA_MESSAGE = "message_id"
         /** For [ACTION_APPROVE]: Hermes' answer name; [EXTRA_MESSAGE] holds the request id. */

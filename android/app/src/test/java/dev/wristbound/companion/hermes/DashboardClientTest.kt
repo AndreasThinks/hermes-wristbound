@@ -102,7 +102,7 @@ class DashboardClientTest {
         val req = server.takeRequest()
         assertEquals("tok", req.getHeader("X-Hermes-Session-Token"))
         assertNull(req.getHeader("Authorization"))
-        assertEquals("/api/sessions/s%201/messages?limit=10&order=latest&inline_images=false", req.path)
+        assertEquals("/api/sessions/s%201/messages?limit=10&order=latest&inline_images=false&include_audio=true", req.path)
         assertEquals(listOf("6", "7"), messages.map { it.stableId })
     }
 
@@ -261,5 +261,22 @@ class DashboardClientTest {
         // Cached: a second play does not download again.
         client(MemoryStore(native("at-1"))).fetchAudio("/home/h/.hermes/cache/audio/tts 1.ogg", tmp.root)
         assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun retainedAudioUsesAuthenticatedOpaqueRouteAndMergesOlderOwner() = runBlocking {
+        val client = client(MemoryStore(native("at-1")))
+        server.enqueue(MockResponse().setBody("""{"messages":[{"id":3,"role":"assistant","content":"later"}],
+          "audio_messages":[{"id":1,"role":"assistant","content":"answer","audio_attachments":[
+            {"id":"abc.ogg","mime_type":"audio/ogg","created_at":20}]}]}"""))
+        val rows = client.recentMessages("s", 1)
+        assertEquals(listOf("1", "3"), rows.map { it.stableId })
+        assertTrue(server.takeRequest().path!!.contains("include_audio=true"))
+        server.enqueue(MockResponse().setBody("fixture-audio"))
+        val clip = client.fetchAudio("attachment:abc.ogg", tmp.root)
+        val request = server.takeRequest()
+        assertEquals("/api/reply-audio/abc.ogg", request.path)
+        assertEquals("Bearer at-1", request.getHeader("Authorization"))
+        assertEquals("fixture-audio", clip.file.readText())
     }
 }

@@ -57,9 +57,11 @@ class DashboardClient(
             addQueryParameter("limit", limit.toString())
             addQueryParameter("order", "latest")
             addQueryParameter("inline_images", "false")
+            addQueryParameter("include_audio", "true")
         }
         // The latest page comes back in display order; sort defensively by row id and time.
-        HermesHttp.decode(MessageList.serializer(), get(url), "a history").messages
+        val page = HermesHttp.decode(MessageList.serializer(), get(url), "a history")
+        (page.messages + page.audio_messages).distinctBy { it.stableId }
             .sortedWith(compareBy({ it.timestamp ?: 0.0 }, { it.stableId.toLongOrNull() ?: 0L }))
     }
 
@@ -74,14 +76,32 @@ class DashboardClient(
         val ext = serverPath.substringAfterLast('.', "mp3").lowercase()
         val target = File(dir, "hermes-${sha1(serverPath)}.$ext")
         if (!target.exists()) {
-            val url = url("api/files/stream") { addQueryParameter("path", serverPath) }
+            val url = if (serverPath.startsWith("attachment:")) {
+                url("api/reply-audio") { addPathSegment(serverPath.removePrefix("attachment:")) }
+            } else url("api/files/stream") { addQueryParameter("path", serverPath) }
             slowHttp.newCall(Request.Builder().url(url).build()).execute().use { response ->
                 if (!response.isSuccessful) throw HermesHttp.error(response)
                 val body = response.body ?: throw IOException("Empty audio")
                 if (body.contentLength() > MAX_AUDIO_BYTES) throw IOException("Audio too large")
                 val tmp = File(dir, target.name + ".part")
-                tmp.outputStream().use { out -> body.byteStream().copyTo(out) }
-                tmp.renameTo(target)
+                try {
+                    tmp.outputStream().use { out ->
+                        body.byteStream().use { input ->
+                            val buffer = ByteArray(8192)
+                            var total = 0L
+                            while (true) {
+                                val read = input.read(buffer)
+                                if (read < 0) break
+                                total += read
+                                if (total > MAX_AUDIO_BYTES) throw IOException("Audio too large")
+                                out.write(buffer, 0, read)
+                            }
+                        }
+                    }
+                    if (!tmp.renameTo(target)) throw IOException("Could not cache audio")
+                } finally {
+                    tmp.delete()
+                }
             }
         }
         AudioClip(target, mimeFor(ext))

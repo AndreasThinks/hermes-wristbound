@@ -371,4 +371,34 @@ class ReplyAlertsTest {
         poll(d)
         assertEquals(listOf("4"), alerts.map { it.messageId })
     }
+
+    @Test
+    fun lateAutomaticAudioAfterBaselineIsDiscoveredAndSurvivesRestart() = runTest {
+        session("tg", "telegram", 10.0, user(1, 1.0), answer(2, 2.0))
+        poll() // text predates first monitoring baseline and was never marked
+        transcripts["tg"] = listOf(user(1, 1.0), msg("""{"id":2,"role":"assistant","timestamp":2,
+          "content":"Answer","audio_attachments":[{"id":"abc.ogg","mime_type":"audio/ogg","created_at":20}]}"""))
+        sessions["tg"] = sessions.getValue("tg").copy(last_active = 20.0)
+        deliveryFailures = 1
+        poll()
+        assertTrue(alerts.isEmpty())
+        poll(dispatcher(store))
+        assertEquals(1, alerts.size)
+        assertTrue(alerts.single().hasAudio)
+        assertFalse(alerts.single().silent)
+        poll(dispatcher(store))
+        assertEquals(1, alerts.size)
+    }
+
+    @Test
+    fun policyChangeDoesNotDoubleAlertAlreadyDeliveredText() = runTest {
+        session("chat", "cli", 10.0)
+        poll()
+        append("chat", 20.0, user(1, 19.0), answer(2, 20.0))
+        poll()
+        policy = policy.copy(chats = false)
+        append("chat", 30.0, answer(3, 30.0, "MEDIA:/cache/tts_late.ogg"))
+        poll()
+        assertEquals(listOf(false, true), alerts.map { it.silent })
+    }
 }
