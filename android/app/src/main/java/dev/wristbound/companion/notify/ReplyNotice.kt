@@ -4,7 +4,7 @@ import dev.wristbound.companion.pebble.Text
 
 /** Content and action policy shared by native rendering and JVM contract tests. */
 data class ReplyNotice(val key: String, val title: String, val body: String, val actions: List<Action>) {
-    val sender = "Hermes"
+    val sender = "Wristbound"
     data class Action(val action: String, val label: String, val showsUserInterface: Boolean = false) {
         fun identity(key: String) = "$key:$action"
     }
@@ -13,8 +13,14 @@ data class ReplyNotice(val key: String, val title: String, val body: String, val
         const val ACTION_PLAY_SPEAKER = "dev.wristbound.companion.PLAY_SPEAKER"
         const val ACTION_OPEN_ON_WATCH = "dev.wristbound.companion.OPEN_ON_WATCH"
         fun create(sessionId: String, messageId: String, title: String, text: String, private: Boolean, audio: Boolean): ReplyNotice {
-            val fallback = if (audio) "New audio reply" else "New reply"
-            val body = if (private) fallback else Text.forSpeech(Text.forWatch(text)).ifBlank { fallback }
+            val preview = if (private) "" else Text.forSpeech(Text.forWatch(text)).trim()
+            // Put availability first: the native watch preview can truncate long reply text.
+            val body = if (audio) {
+                if (preview.isBlank()) "Audio reply available" else "Audio reply available\n$preview"
+            } else preview.ifBlank { "New reply" }
+            val conversation = if (private) "" else title.trim()
+            val heading = if (conversation.isBlank() || conversation == "Wristbound") "Wristbound"
+                else "Wristbound · $conversation"
             val actions = buildList {
                 if (audio) {
                     add(Action(ACTION_PLAY, "Play audio"))
@@ -22,7 +28,7 @@ data class ReplyNotice(val key: String, val title: String, val body: String, val
                 }
                 add(Action(ACTION_OPEN_ON_WATCH, "Open in Wristbound"))
             }
-            return ReplyNotice("${sessionId.length}:$sessionId$messageId", if (private) "Hermes" else title.ifBlank { "Hermes" }, body, actions)
+            return ReplyNotice("${sessionId.length}:$sessionId$messageId", heading, body, actions)
         }
     }
 }
