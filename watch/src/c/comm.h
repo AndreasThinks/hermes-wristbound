@@ -14,6 +14,9 @@ typedef struct {
   void (*stream_changed)(void);
   void (*reply_received)(const char *session_id, const char *message_id,
                          const char *title, const char *text, uint8_t flags);
+  // Hermes asks before a step (State 0), or that question was settled elsewhere (State 1).
+  void (*approval)(const char *session_id, const char *request_id, const char *title,
+                   const char *text, uint8_t choices, bool closed);
 } CommHandlers;
 
 void comm_init(CommHandlers handlers);
@@ -33,4 +36,5 @@ void comm_open_reply(const char *session_id, const char *message_id);
 void comm_play_watch(const char *session_id, const char *message_id, uint16_t chunk);
 void comm_audio_pull(const char *message_id, uint32_t offset, uint32_t length);
 void comm_audio_stop(const char *message_id);
+void comm_approve(const char *session_id, const char *request_id, ApprovalChoice choice);
 uint32_t comm_inbox_size(void);

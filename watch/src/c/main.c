@@ -1,4 +1,5 @@
 #include <pebble.h>
+#include "approval.h"
 #include "comm.h"
 #include "model.h"
 #include "speaker.h"
@@ -17,6 +18,9 @@ static void prv_init(void) {
     .audio_changed = ui_audio_changed,
     .stream_changed = ui_stream_changed,
     .reply_received = ui_reply_received,
+#if defined(APPROVAL_ENABLED)
+    .approval = ui_approval,
+#endif
   });
   wspk_init(ui_playback_changed);
   g_model.sessions_loading = true;

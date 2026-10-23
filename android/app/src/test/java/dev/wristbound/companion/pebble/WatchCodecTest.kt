@@ -24,6 +24,22 @@ class WatchCodecTest {
     }
 
     @Test
+    fun approvalsBothWays() {
+        val hello = WatchCodec.decode(mapOf(Key.CMD to u8(1), Key.FLAGS to u8(Protocol.HelloFlag.APPROVALS))) as WatchCommand.Hello
+        assertEquals(true, hello.approvals)
+        assertEquals(false, (WatchCodec.decode(mapOf(Key.CMD to u8(1))) as WatchCommand.Hello).approvals)
+        assertEquals(
+            WatchCommand.Approve("s1", "srq-1", "deny"),
+            WatchCodec.decode(mapOf(Key.CMD to u8(16), Key.SESSION_ID to t("s1"), Key.MESSAGE_ID to t("srq-1"), Key.STATE to u8(3))),
+        )
+        assertNull(WatchCodec.decode(mapOf(Key.CMD to u8(16), Key.MESSAGE_ID to t("srq-1"), Key.STATE to u8(9))))
+        val msg = WatchCodec.approval("s1", "srq-1", "Repo", "rm -rf build", listOf("once", "deny"), closed = false, textBudget = 1200)
+        assertEquals(Protocol.Type.APPROVAL, (msg[Key.TYPE] as PebbleDictionaryItem.UInt8).value.toInt())
+        assertEquals(0b1001, (msg[Key.FLAGS] as PebbleDictionaryItem.UInt8).value.toInt())
+        assertEquals(0, (msg[Key.STATE] as PebbleDictionaryItem.UInt8).value.toInt())
+    }
+
+    @Test
     fun encodesStreamAndConfig() {
         val stream = WatchCodec.stream("s1", "Hello there, this is long", 12)
         assertEquals(Protocol.Type.STREAM, (stream[Key.TYPE] as PebbleDictionaryItem.UInt8).value.toInt())

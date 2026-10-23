@@ -7,7 +7,7 @@
 
 // Watch -> phone commands (MESSAGE_KEY_Cmd)
 typedef enum {
-  CMD_HELLO = 1,         // TextBudget, ProtoVersion, State (Quick launch), SessionId (last selected, optional)
+  CMD_HELLO = 1,         // TextBudget, ProtoVersion, State (Quick launch), Flags (HELLO_FLAG_*), SessionId (last selected, optional)
   CMD_LIST_SESSIONS = 2,
   CMD_OPEN_SESSION = 3,  // SessionId
   CMD_SEND = 4,          // SessionId, Text
@@ -22,6 +22,7 @@ typedef enum {
   CMD_PLAY_WATCH = 13,   // SessionId, MessageId, TextBudget (largest PCM chunk the inbox takes)
   CMD_AUDIO_PULL = 14,   // MessageId, Offset (bytes received), Length (room for this many more)
   CMD_AUDIO_STOP = 15,   // MessageId
+  CMD_APPROVE = 16,      // SessionId, MessageId (the request), State (ApprovalChoice)
 } Command;
 
 // Phone -> watch message types (MESSAGE_KEY_Type)
@@ -39,7 +40,20 @@ typedef enum {
   TYPE_AUDIO_ROUTE = 11,   // State (1 = headphones connected to the phone)
   TYPE_STREAM = 12,        // SessionId, Text: the reply so far, while Hermes writes it
   TYPE_CONFIG = 13,        // State (QuickLaunch): watch options, set in the phone app
+  TYPE_APPROVAL = 14,      // SessionId, MessageId (the request), Title, Text, Flags (choices), State (0 open, 1 closed)
 } MessageType;
+
+// HELLO Flags.
+#define HELLO_FLAG_APPROVALS 1 // answers approval requests on the watch
+
+// Hermes' answers to an approval request; an APPROVAL's Flags offer them as bits (1 << choice).
+typedef enum {
+  APPROVAL_ONCE = 0,
+  APPROVAL_SESSION = 1,
+  APPROVAL_ALWAYS = 2,
+  APPROVAL_DENY = 3,
+  APPROVAL_CHOICES = 4,
+} ApprovalChoice;
 
 typedef enum {
   CONN_OK = 0,

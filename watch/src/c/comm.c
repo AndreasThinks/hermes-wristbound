@@ -1,4 +1,5 @@
 #include "comm.h"
+#include "approval.h"
 #include "model.h"
 #include "speaker.h"
 
@@ -87,6 +88,10 @@ static void prv_pump(void) {
       dict_write_uint8(iter, MESSAGE_KEY_ProtoVersion, PROTO_VERSION);
       // What the watch opens on, so a phone that has no choice saved yet keeps the watch's.
       dict_write_uint8(iter, MESSAGE_KEY_State, g_model.quick_launch);
+      // Flags: what this watchapp can do beyond the basics.
+#if defined(APPROVAL_ENABLED)
+      dict_write_uint8(iter, MESSAGE_KEY_Flags, HELLO_FLAG_APPROVALS);
+#endif
       if (p->session_id[0]) {
         dict_write_cstring(iter, MESSAGE_KEY_SessionId, p->session_id);
       }
@@ -125,6 +130,13 @@ static void prv_pump(void) {
     case CMD_AUDIO_STOP:
       dict_write_cstring(iter, MESSAGE_KEY_MessageId, p->message_id);
       break;
+#if defined(APPROVAL_ENABLED)
+    case CMD_APPROVE:
+      dict_write_cstring(iter, MESSAGE_KEY_SessionId, p->session_id);
+      dict_write_cstring(iter, MESSAGE_KEY_MessageId, p->message_id);
+      dict_write_uint8(iter, MESSAGE_KEY_State, p->route);
+      break;
+#endif
     default:
       break;
   }
@@ -321,6 +333,15 @@ static void prv_inbox_received(DictionaryIterator *iter, void *ctx) {
                                   prv_int(iter, MESSAGE_KEY_Flags, 0));
       }
       break;
+#if defined(APPROVAL_ENABLED)
+    case TYPE_APPROVAL:
+      if (s_handlers.approval) {
+        s_handlers.approval(prv_str(iter, MESSAGE_KEY_SessionId), prv_str(iter, MESSAGE_KEY_MessageId),
+                            prv_str(iter, MESSAGE_KEY_Title), prv_str(iter, MESSAGE_KEY_Text),
+                            prv_int(iter, MESSAGE_KEY_Flags, 0), prv_int(iter, MESSAGE_KEY_State, 0) != 0);
+      }
+      break;
+#endif
     case TYPE_PLAYBACK:
       prv_copy(g_model.playback_message_id, prv_str(iter, MESSAGE_KEY_MessageId), MESSAGE_ID_LEN);
       g_model.playback = prv_int(iter, MESSAGE_KEY_State, PLAYBACK_IDLE);
@@ -501,3 +522,13 @@ void comm_audio_stop(const char *message_id) {
 uint32_t comm_inbox_size(void) {
   return s_inbox_size;
 }
+
+#if defined(APPROVAL_ENABLED)
+void comm_approve(const char *session_id, const char *request_id, ApprovalChoice choice) {
+  Pending p = prv_pending(CMD_APPROVE);
+  prv_copy(p.session_id, session_id, SESSION_ID_LEN);
+  prv_copy(p.message_id, request_id, MESSAGE_ID_LEN);
+  p.route = choice; // the choice rides in the route byte
+  prv_enqueue(&p);
+}
+#endif

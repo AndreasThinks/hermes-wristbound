@@ -81,7 +81,14 @@ When a turn in a Telegram session finishes, the reply is stored in that session 
 
 **Push delivery.** The gateway socket broadcasts `sessions.changed`, but holding a socket open on a locked phone is fragile, so replies that arrive through Telegram, Ringbearer or the desktop are still found by polling `GET /api/sessions`: every 30 s while the watchapp is open, and from the optional foreground service (30 s to 5 min) while it is closed. Replies to turns sent from the watch arrive live over the socket.
 
-**Server prompts.** Tool approvals, clarifications and sudo or secret prompts need another client (desktop, terminal UI or Telegram) to answer. The turn waits; the watch shows that it is waiting.
+**Server prompts.** Hermes asks its clients questions as JSON-RPC requests from the server (`{"id": "srq-…", "method": "approval", "params": {...}}`), answered with a response frame carrying the same id. It sends them only to connections that called `client.capabilities {server_requests: true}`; with no such client attached it gives up at once, so the phone always advertises. For a turn the phone runs:
+
+- `approval` (params `command`, already redacted, `description`, `choices` from `once`, `session`, `always`, `deny`) goes to the watch, or to a phone notification with the answers as actions. The answer is `{"result": {"choice": "<name>"}}`.
+- Anything else (`clarify`, `sudo`, `secret`, vault and window prompts) is declined with error code 4404, which tells Hermes this client does not show the session: the desktop or terminal UI can still answer, and Hermes only gives up once every attached client declined. The watch says the turn needs an answer on the desktop.
+- `request.cancel` (an event, payload `id`) means the question was settled elsewhere or timed out; the watch card and notification go away.
+- After a dropped socket, `session.resume` returns questions still waiting as `open_requests`, and the phone offers them again.
+
+Approvals in turns the phone does not run (started on the desktop or in Telegram) are answered where they started.
 
 **Unread state.** List rows do not carry a per-client unread flag, so the phone keeps its own "seen up to" timestamp per session.
 

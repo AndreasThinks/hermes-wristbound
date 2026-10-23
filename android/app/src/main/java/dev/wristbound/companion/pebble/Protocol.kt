@@ -52,6 +52,7 @@ object Protocol {
         const val PLAY_WATCH = 13
         const val AUDIO_PULL = 14
         const val AUDIO_STOP = 15
+        const val APPROVE = 16
     }
 
     object Type {
@@ -70,7 +71,18 @@ object Protocol {
         const val STREAM = 12
         /** Watch settings kept in the companion app: STATE = Quick launch. */
         const val CONFIG = 13
+        /** Hermes asks before a step: SessionId, MessageId (request), Title, Text, Flags (choices), State (0 open, 1 closed). */
+        const val APPROVAL = 14
     }
+
+    /** HELLO Flags: what the watchapp can do. */
+    object HelloFlag {
+        /** It shows approval requests and answers them (not aplite: no room). */
+        const val APPROVALS = 1
+    }
+
+    /** Hermes' approval answers, by the number the watch uses; an APPROVAL's Flags offer them as bits. */
+    val APPROVAL_CHOICES = listOf("once", "session", "always", "deny")
 
     /** What the watchapp opens on (watch/src/c/model.h QuickLaunch). */
     object QuickLaunch {

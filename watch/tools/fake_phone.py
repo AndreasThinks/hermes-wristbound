@@ -8,6 +8,7 @@ It speaks the AppMessage protocol from docs/PROTOCOL.md with canned data: no Her
     python3 tools/fake_phone.py basalt headphones &   # as if headphones were connected to the phone
     python3 tools/fake_phone.py basalt alert &        # a reply from another session arrives 8 s in
     python3 tools/fake_phone.py basalt quick=1 &      # Quick launch choice the phone app sends (TYPE_CONFIG)
+    python3 tools/fake_phone.py basalt approve &      # a sent message makes Hermes ask before a command
     pebble emu-button click select --emulator basalt
     pebble screenshot --emulator basalt
 
@@ -56,7 +57,7 @@ AUDIO = [
 TONE = bytes(int(100 * math.sin(2 * math.pi * 440 * i / 8000)) & 0xFF for i in range(8000 * 4))
 
 
-def main(platform, headphones, alert, quick):
+def main(platform, headphones, alert, quick, approve=False):
     state = json.load(open("/tmp/pb-emulator.json"))[platform]
     port = next(iter(state.values()))["pypkjs"]["port"]
     pebble = PebbleConnection(WebsocketTransport(f"ws://localhost:{port}/"))
@@ -124,6 +125,30 @@ def main(platform, headphones, alert, quick):
 
     threading.Thread(target=streamer, daemon=True).start()
 
+    answered = threading.Event()
+
+    def run_turn(named):
+        sid = named["SessionId"]
+        send({"Type": 6, "SessionId": sid, "State": 2, "Detail": "Hermes is working"})
+        time.sleep(1.5)
+        if approve:
+            answered.clear()
+            send({"Type": 6, "SessionId": sid, "State": 2, "Detail": "Waiting for your OK"})
+            send({"Type": 14, "SessionId": sid, "MessageId": "srq-1a2b3c4d5e6f", "Title": "Watch chat",
+                  "Text": "Delete the old build output\nrm -rf build/ dist/", "Flags": 0b1011, "State": 0})
+            answered.wait(60)
+            send({"Type": 6, "SessionId": sid, "State": 2, "Detail": "Approved"})
+        # The reply streams in a few words at a time, as the phone relays Hermes' deltas.
+        words = STREAMED.split(" ")
+        for n in range(3, len(words) + 3, 4):
+            send({"Type": 12, "SessionId": sid, "Text": " ".join(words[:n])})
+            time.sleep(0.5)
+        send({"Type": 6, "SessionId": sid, "State": 3, "Detail": "Reply received"})
+        send({"Type": 4, "SessionId": sid, "MessageId": "6", "Title": "Watch chat", "Text": STREAMED, "Flags": 0})
+        MESSAGES.append((str(len(MESSAGES) + 1), 0, named.get("Text", ""), 0))
+        MESSAGES.append((str(len(MESSAGES) + 1), 1, STREAMED, 0))
+        send_messages(sid)
+
     def on_message(tid, app, data):
         named = {NAMES.get(k, k): v for k, v in data.items()}
         print("watch ->", {k: v for k, v in named.items() if k != "Data"}, flush=True)
@@ -148,20 +173,12 @@ def main(platform, headphones, alert, quick):
                   "Text": item[3] + " That's everything on the list for this week.", "Flags": 2 | 8})
         elif cmd == 3:
             send_messages(named["SessionId"])
+        elif cmd == 16:
+            print("approval answer:", ["once", "session", "always", "deny"][named.get("State", 3)], flush=True)
+            answered.set()
         elif cmd == 4:
-            sid = named["SessionId"]
-            send({"Type": 6, "SessionId": sid, "State": 2, "Detail": "Hermes is working"})
-            time.sleep(1.5)
-            # The reply streams in a few words at a time, as the phone relays Hermes' deltas.
-            words = STREAMED.split(" ")
-            for n in range(3, len(words) + 3, 4):
-                send({"Type": 12, "SessionId": sid, "Text": " ".join(words[:n])})
-                time.sleep(0.5)
-            send({"Type": 6, "SessionId": sid, "State": 3, "Detail": "Reply received"})
-            send({"Type": 4, "SessionId": sid, "MessageId": "6", "Title": "Watch chat", "Text": STREAMED, "Flags": 0})
-            MESSAGES.append((str(len(MESSAGES) + 1), 0, named.get("Text", ""), 0))
-            MESSAGES.append((str(len(MESSAGES) + 1), 1, STREAMED, 0))
-            send_messages(sid)
+            # Off the handler thread, so an approval answer can arrive meanwhile.
+            threading.Thread(target=run_turn, args=(dict(named),), daemon=True).start()
         elif cmd in (6, 9):
             if named.get("Route") == 1:
                 send({"Type": 5, "MessageId": named["MessageId"], "State": 1, "Detail": "Playing on phone speaker"})
@@ -188,4 +205,5 @@ def main(platform, headphones, alert, quick):
 if __name__ == "__main__":
     flags = sys.argv[2:]
     quick = next((int(f.split("=")[1]) for f in flags if f.startswith("quick=")), 0)
-    main(sys.argv[1] if len(sys.argv) > 1 else "basalt", "headphones" in flags, "alert" in flags, quick)
+    main(sys.argv[1] if len(sys.argv) > 1 else "basalt", "headphones" in flags, "alert" in flags, quick,
+         "approve" in flags)

@@ -6,7 +6,7 @@ import android.content.Intent
 import dev.wristbound.companion.core.Wristbound
 import kotlinx.coroutines.launch
 
-/** Handles reply-notification actions, including ones pressed on the Pebble. */
+/** Handles reply and approval notification actions, including ones pressed on the Pebble. */
 class ActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val sessionId = intent.getStringExtra(EXTRA_SESSION) ?: return
@@ -19,6 +19,7 @@ class ActionReceiver : BroadcastReceiver() {
                     ACTION_PLAY -> controller.play(sessionId, messageId, speaker = false)
                     ACTION_PLAY_SPEAKER -> controller.play(sessionId, messageId, speaker = true)
                     ACTION_OPEN_ON_WATCH -> controller.openReplyOnWatch(sessionId, messageId)
+                    ACTION_APPROVE -> intent.getStringExtra(EXTRA_CHOICE)?.let { controller.answerApproval(messageId, it) }
                 }
             } finally {
                 pending.finish()
@@ -32,5 +33,8 @@ class ActionReceiver : BroadcastReceiver() {
         const val ACTION_OPEN_ON_WATCH = "dev.wristbound.companion.OPEN_ON_WATCH"
         const val EXTRA_SESSION = "session_id"
         const val EXTRA_MESSAGE = "message_id"
+        /** For [ACTION_APPROVE]: Hermes' answer name; [EXTRA_MESSAGE] holds the request id. */
+        const val EXTRA_CHOICE = "choice"
+        const val ACTION_APPROVE = "dev.wristbound.companion.APPROVE"
     }
 }

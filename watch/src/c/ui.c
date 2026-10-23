@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "approval.h"
 #include "banner.h"
 #include "comm.h"
 #include "model.h"
@@ -922,8 +923,22 @@ static void prv_draw_entry(GContext *ctx, const ConvEntry *e, int16_t y, int16_t
                      GTextOverflowModeWordWrap, align, NULL);
 }
 
+// An approval question open for the session on screen.
+static bool prv_conv_awaits_approval(void) {
+#if defined(APPROVAL_ENABLED)
+  const char *sid = approval_pending_session();
+  return sid && strcmp(sid, g_model.open_session_id) == 0;
+#else
+  return false;
+#endif
+}
+
 static void prv_draw_tail(GContext *ctx, int16_t y, int16_t w) {
+#if defined(APPROVAL_ENABLED)
+  const char *label = prv_conv_awaits_approval() ? "Needs your OK: Select" : prv_submit_label();
+#else
   const char *label = prv_submit_label();
+#endif
   bool working = prv_working();
   GTextAlignment align = PBL_IF_ROUND_ELSE(GTextAlignmentCenter, GTextAlignmentLeft);
   if (working) {
@@ -1018,6 +1033,12 @@ static void prv_conv_scrolled(ScrollLayer *scroll, void *ctx) {
 }
 
 static void prv_conv_select(ClickRecognizerRef rec, void *ctx) {
+#if defined(APPROVAL_ENABLED)
+  if (prv_conv_awaits_approval()) {
+    approval_reopen();
+    return;
+  }
+#endif
   // Read-only sessions (refused by Hermes, or Telegram with replies turned off on the phone)
   // stay readable and playable; the phone also refuses the send. One turn at a time.
   if ((g_model.open_session_flags & SESSION_FLAG_READ_ONLY) || prv_working() ||
@@ -1049,7 +1070,8 @@ static void prv_conv_long_select(ClickRecognizerRef rec, void *ctx) {
     s_history_shed = true;
   }
 #endif
-  ActionMenuLevel *root = action_menu_level_create(9);
+  // Play rows (at most three without a watch speaker), Newest, Refresh.
+  ActionMenuLevel *root = action_menu_level_create(wspk_supported() ? 9 : 5);
   if (audio) {
     prv_add_play_rows(root);
   }
@@ -1796,7 +1818,34 @@ void ui_init(void) {
   splash_show();
 }
 
+#if defined(APPROVAL_ENABLED)
+static void prv_approval_answer(const char *session_id, const char *request_id, ApprovalChoice choice) {
+  comm_approve(session_id, request_id, choice);
+  if (s_conv_body) {
+    layer_mark_dirty(s_conv_body);
+  }
+}
+
+void ui_approval(const char *session_id, const char *request_id, const char *title, const char *text,
+                 uint8_t choices, bool closed) {
+  if (closed) {
+    approval_close(request_id);
+  } else {
+#if defined(BANNER_ENABLED)
+    banner_hide();
+#endif
+    approval_show(session_id, request_id, title, text, choices, prv_approval_answer);
+  }
+  if (s_conv_body) {
+    layer_mark_dirty(s_conv_body);
+  }
+}
+#endif
+
 void ui_deinit(void) {
+#if defined(APPROVAL_ENABLED)
+  approval_deinit();
+#endif
   if (s_dictation) {
     dictation_session_destroy(s_dictation);
   }

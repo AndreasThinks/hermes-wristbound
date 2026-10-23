@@ -67,6 +67,12 @@ class Wristbound private constructor(context: Context) {
     @Volatile var watchOpen = false
         private set
     @Volatile private var textBudget = Protocol.DEFAULT_TEXT_BUDGET
+    /** The open watchapp answers approvals itself (HELLO); otherwise they go to a notification. */
+    @Volatile private var watchApproves = false
+
+    /** An approval Hermes is waiting on, in a turn this phone runs. */
+    private class OpenApproval(val sessionId: String, val title: String, val request: ApprovalRequest, val answer: (String) -> Boolean)
+    private val approvals = ConcurrentHashMap<String, OpenApproval>()
     @Volatile private var pendingReply: Pair<String, String>? = null
     @Volatile private var lastSend: Triple<String, String, Long>? = null
 
@@ -173,6 +179,7 @@ class Wristbound private constructor(context: Context) {
         when (cmd) {
             is WatchCommand.Hello -> {
                 textBudget = cmd.textBudget.coerceIn(64, 4000)
+                watchApproves = cmd.approvals
                 if (cmd.protoVersion != Protocol.VERSION) {
                     watch.send(WatchCodec.status(Protocol.Conn.ERROR, "Update watch or phone app"))
                 }
@@ -188,6 +195,8 @@ class Wristbound private constructor(context: Context) {
                     pendingReply = null
                     sendReplyToWatch(sid, mid)
                 }
+                // A question still waiting: the watch takes it over from the notification.
+                approvals.values.forEach { showApproval(it) }
             }
             WatchCommand.ListSessions -> pushSessions()
             is WatchCommand.OpenSession -> openSession(cmd.sessionId)
@@ -202,6 +211,7 @@ class Wristbound private constructor(context: Context) {
             is WatchCommand.PlayOnWatch -> playOnWatch(cmd.sessionId, cmd.messageId, cmd.chunkBytes)
             is WatchCommand.AudioPull -> watchStream.pull(cmd.messageId, cmd.offset, cmd.length)
             is WatchCommand.AudioStop -> watchStream.stop(cmd.messageId)
+            is WatchCommand.Approve -> answerApproval(cmd.requestId, cmd.choice)
             is WatchCommand.OpenReply -> {
                 state.markHeard(cmd.messageId)
                 sendReplyToWatch(cmd.sessionId, cmd.messageId, requested = true)
@@ -430,8 +440,19 @@ class Wristbound private constructor(context: Context) {
                     watch.send(WatchCodec.sessionOpened(WatchSession(id, title, 0)))
                 },
                 onDelta = { stream.delta(it) },
+                onApproval = { request, answer ->
+                    val sid = sessionId
+                    if (sid == null) {
+                        answer("deny") // cannot happen: Hermes asks inside a session
+                    } else {
+                        OpenApproval(sid, title, request, answer).also { approvals[request.id] = it; showApproval(it) }
+                    }
+                },
+                onApprovalClosed = { closeApproval(it) },
             )
             stream.finish()
+            // The turn is over: any question it asked is settled.
+            approvals.values.filter { it.sessionId == sessionId }.forEach { closeApproval(it.request.id) }
             notifier.clearToolActivity()
             val sid = sessionId
             when (outcome) {
@@ -463,6 +484,43 @@ class Wristbound private constructor(context: Context) {
 
     private suspend fun submitState(sessionId: String?, s: Protocol.Submit, detail: String) {
         if (watchOpen) watch.send(WatchCodec.submit(sessionId, s, detail))
+    }
+
+    // -- approvals ------------------------------------------------------------------------------
+
+    /**
+     * Put an approval in front of the user: on the open watchapp when it can answer, otherwise as
+     * a notification with the answers as actions, which the Pebble mirrors. Always alerts.
+     */
+    private suspend fun showApproval(open: OpenApproval) {
+        val r = open.request
+        val text = listOf(r.description, r.command).filter { it.isNotBlank() }.distinct().joinToString("\n")
+            .ifBlank { "Hermes wants to go ahead" }
+        if (watchOpen && watchApproves &&
+            watch.send(WatchCodec.approval(open.sessionId, r.id, open.title, Text.forWatch(text), r.choices, closed = false, textBudget))
+        ) {
+            notifier.clearApproval(r.id)
+            return
+        }
+        notifier.approval(open.sessionId, r.id, open.title, Text.forWatch(text), r.choices)
+    }
+
+    /** The user's answer, from the watch or a notification action. False if Hermes no longer waits. */
+    suspend fun answerApproval(requestId: String, choice: String): Boolean {
+        val open = approvals.remove(requestId) ?: return false
+        notifier.clearApproval(requestId)
+        val sent = open.answer(choice)
+        submitState(open.sessionId, Protocol.Submit.WORKING, if (!sent) "Could not answer; check the desktop" else if (choice == "deny") "Denied" else "Approved")
+        return sent
+    }
+
+    /** Hermes stopped waiting (answered elsewhere, timed out, or the turn ended). */
+    private suspend fun closeApproval(requestId: String) {
+        val open = approvals.remove(requestId) ?: return
+        notifier.clearApproval(requestId)
+        if (watchOpen && watchApproves) {
+            watch.send(WatchCodec.approval(open.sessionId, requestId, open.title, "", emptyList(), closed = true, textBudget))
+        }
     }
 
     /** The reply to a turn sent from the watch, through the same alert policy as polling. */

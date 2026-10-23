@@ -33,7 +33,7 @@ Keys are numbered by the Pebble SDK from the order of `messageKeys` in `watch/pa
 
 | Cmd | Name | Fields |
 |-----|------|--------|
-| 1 | HELLO | TextBudget, ProtoVersion, State (the watch's saved Quick launch), SessionId (last open, optional) |
+| 1 | HELLO | TextBudget, ProtoVersion, State (the watch's saved Quick launch), Flags (1: answers approvals; not sent by aplite), SessionId (last open, optional) |
 | 2 | LIST_SESSIONS | |
 | 3 | OPEN_SESSION | SessionId |
 | 4 | SEND | SessionId, Text |
@@ -48,6 +48,7 @@ Keys are numbered by the Pebble SDK from the order of `messageKeys` in `watch/pa
 | 13 | PLAY_WATCH | SessionId, MessageId, TextBudget (largest Data chunk the watch takes). Play this reply on the watch's own speaker; answered with AUDIO_START. Sending it again replays from the start. |
 | 14 | AUDIO_PULL | MessageId, Offset, Length. The phone may send the clip up to Offset + Length. |
 | 15 | AUDIO_STOP | MessageId. Stop sending this clip. |
+| 16 | APPROVE | SessionId, MessageId (the request id), State (0 allow once, 1 allow for the session, 2 always allow, 3 deny). The answer to an APPROVAL. |
 
 ## Phone → watch (`Type`)
 
@@ -66,6 +67,7 @@ Keys are numbered by the Pebble SDK from the order of `messageKeys` in `watch/pa
 | 11 | AUDIO_ROUTE | State (1 = headphones connected to the phone). Sent after HELLO and whenever headphones connect or disconnect; the watch offers *Play on headphones* only while it is 1. |
 | 12 | STREAM | SessionId, Text. The reply so far while Hermes writes it, at most every 0.7 s. The watch shows it in the open conversation only while that session's SUBMIT is queued or working; the history reload after the turn replaces it. A new segment (Hermes wrote some text, used a tool, then wrote more) replaces the text before it. |
 | 13 | CONFIG | State (Quick launch: 0 home, 1 dictate a new session, 2 recent audio, 3 play latest audio, 4 last session). Watch options are set in the companion app. Sent after HELLO once the phone has a choice saved, and when it changes; the watch stores it. A phone with nothing saved adopts the watch's value from HELLO. |
+| 14 | APPROVAL | SessionId, MessageId (Hermes' request id), Title (session), Text (what Hermes wants to do, ≤ 480 bytes), Flags (the answers offered, as bits 1 << choice; deny is always offered), State (0 open, 1 closed: answered elsewhere, timed out, or the turn ended). Sent only to a watch whose HELLO set Flags 1; otherwise the phone posts a notification with the answers as actions. |
 
 Session flags: 1 unread, 2 Telegram origin, 4 Hermes refused to continue it (for example a Kanban worker transcript), 8 Hermes is working. Message flags: 1 truncated (rest on phone), 2 Hermes generated audio for this reply, 4 pending, 8 requested (REPLY only).
 

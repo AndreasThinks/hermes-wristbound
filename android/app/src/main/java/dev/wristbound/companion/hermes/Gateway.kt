@@ -31,7 +31,8 @@ import java.util.concurrent.atomic.AtomicInteger
 /**
  * One frame Hermes pushed on the gateway socket: an event (`message.delta`, `message.complete`,
  * `tool.start`, ...) or, when [requestId] is set, a request Hermes is asking a client to answer
- * (`approval.request`, `clarify.request`, ...).
+ * (`approval`, `clarify`, `sudo`, ...), which [Gateway.answer] or [Gateway.decline] settles.
+ * A client gets those requests only after `client.capabilities {server_requests: true}`.
  */
 data class GatewayEvent(
     val type: String,
@@ -58,7 +59,21 @@ interface Gateway : AutoCloseable {
      */
     suspend fun call(method: String, params: JsonObject, timeoutMs: Long = 30_000, onSent: () -> Unit = {}): JsonObject
 
+    /** Answer a request Hermes sent ([GatewayEvent.requestId]). False if the socket is gone. */
+    fun answer(requestId: String, result: JsonObject): Boolean
+
+    /**
+     * Turn down a request this app cannot answer. With [NOT_SHOWN] another app showing the
+     * session (the desktop) can still answer it; Hermes gives up only once every app declined.
+     */
+    fun decline(requestId: String, code: Int, message: String): Boolean
+
     override fun close()
+
+    companion object {
+        /** `server_requests.NOT_SHOWN_CODE`: "not mine to answer". */
+        const val NOT_SHOWN = 4404
+    }
 }
 
 /**
@@ -96,6 +111,18 @@ class GatewaySocket private constructor() : Gateway, WebSocketListener() {
             pending.remove(id)
         }
     }
+
+    override fun answer(requestId: String, result: JsonObject): Boolean = closedCause == null &&
+        socket.send(buildJsonObject { put("jsonrpc", "2.0"); put("id", requestId); put("result", result) }.toString())
+
+    override fun decline(requestId: String, code: Int, message: String): Boolean = closedCause == null &&
+        socket.send(
+            buildJsonObject {
+                put("jsonrpc", "2.0")
+                put("id", requestId)
+                put("error", buildJsonObject { put("code", code); put("message", message) })
+            }.toString(),
+        )
 
     override fun close() {
         socket.close(1000, null)
@@ -142,7 +169,7 @@ class GatewaySocket private constructor() : Gateway, WebSocketListener() {
                 channel.trySend(GatewayEvent(type, params.string("session_id"), params["payload"] as? JsonObject ?: JsonObject(emptyMap())))
             }
             method != null -> {
-                // A request from Hermes to its clients: an approval, clarification or secret prompt.
+                // A request from Hermes to its clients: an approval, clarification or password prompt.
                 val params = obj["params"] as? JsonObject ?: JsonObject(emptyMap())
                 channel.trySend(GatewayEvent(method, params.string("session_id"), params, (id as? JsonPrimitive)?.contentOrNull))
             }
