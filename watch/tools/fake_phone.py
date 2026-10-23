@@ -6,6 +6,8 @@ It speaks the AppMessage protocol from docs/PROTOCOL.md with canned data: no Her
     pebble install --emulator basalt
     python3 tools/fake_phone.py basalt &      # run with pebble-tool's Python (needs libpebble2)
     python3 tools/fake_phone.py basalt headphones &   # as if headphones were connected to the phone
+    python3 tools/fake_phone.py basalt alert &        # a reply from another session arrives 8 s in
+    python3 tools/fake_phone.py basalt quick=1 &      # Quick launch choice the phone app sends (TYPE_CONFIG)
     pebble emu-button click select --emulator basalt
     pebble screenshot --emulator basalt
 
@@ -35,12 +37,14 @@ SESSIONS = [
     ("cli_1", "Repo cleanup", 4),         # read-only
 ]
 MESSAGES = [
-    ("1", 0, "What's on my calendar this afternoon?"),
+    ("1", 0, "What's on my calendar this afternoon?", 0),
     ("2", 1, "You have a design review at 2pm and a dentist appointment at 4:30. "
-             "Traffic to the dentist looks light, so leaving at 4:10 should be fine."),
-    ("3", 0, "Remind me at 4."),
-    ("4", 1, "Done. I'll remind you at 4:00pm to leave for the dentist."),
+             "Traffic to the dentist looks light, so leaving at 4:10 should be fine.", 0),
+    ("3", 0, "Remind me at 4.", 0),
+    ("4", 1, "Done. I'll remind you at 4:00pm to leave for the dentist.", 2),  # has audio
 ]
+STREAMED = ("Noted. I'll keep an eye on the traffic and nudge you if you need to leave earlier "
+            "than 4:10. Anything else for this afternoon?")
 # Recent audio: (session id, message id, session title, preview, minutes ago, flags: 1 new, 2 telegram)
 AUDIO = [
     ("tg_1", "41", "Index: groceries", "Here's the list read out: oat milk, eggs, coffee...", 3, 1 | 2),
@@ -52,7 +56,7 @@ AUDIO = [
 TONE = bytes(int(100 * math.sin(2 * math.pi * 440 * i / 8000)) & 0xFF for i in range(8000 * 4))
 
 
-def main(platform, headphones):
+def main(platform, headphones, alert, quick):
     state = json.load(open("/tmp/pb-emulator.json"))[platform]
     port = next(iter(state.values()))["pypkjs"]["port"]
     pebble = PebbleConnection(WebsocketTransport(f"ws://localhost:{port}/"))
@@ -79,9 +83,9 @@ def main(platform, headphones):
             send({"Type": 1, "Index": i, "Total": len(rows), "SessionId": sid, "Title": title, "Flags": flags})
 
     def send_messages(sid):
-        for i, (mid, role, text) in enumerate(MESSAGES):
+        for i, (mid, role, text, flags) in enumerate(MESSAGES):
             send({"Type": 2, "SessionId": sid, "Index": i, "Total": len(MESSAGES), "MessageId": mid,
-                  "Role": role, "Flags": 0, "Text": text})
+                  "Role": role, "Flags": flags, "Text": text})
 
     def send_audio(include_telegram):
         rows = [a for a in AUDIO if include_telegram or not a[5] & 2]
@@ -126,12 +130,18 @@ def main(platform, headphones):
         cmd = named.get("Cmd")
         if cmd == 1:
             send({"Type": 11, "State": 1 if headphones else 0})
+            send({"Type": 13, "State": quick})
+            if alert:
+                threading.Timer(8, lambda: send({
+                    "Type": 4, "SessionId": "tg_1", "MessageId": "42", "Title": "Index: groceries",
+                    "Text": "Oat milk is on offer at the corner shop until Sunday, so I've moved it to "
+                            "the top of the list. Want me to add coffee too?", "Flags": 2})).start()
         if cmd == 1 or cmd == 2:
-            send_sessions(named.get("Filter", 1))
+            send_sessions(True)
             if cmd == 1:
-                send_audio(named.get("Filter", 1))
+                send_audio(True)
         elif cmd == 11:
-            send_audio(named.get("Filter", 1))
+            send_audio(True)
         elif cmd == 12:
             item = next(a for a in AUDIO if a[1] == named["MessageId"])
             send({"Type": 4, "SessionId": item[0], "MessageId": item[1], "Title": item[2],
@@ -142,9 +152,16 @@ def main(platform, headphones):
             sid = named["SessionId"]
             send({"Type": 6, "SessionId": sid, "State": 2, "Detail": "Hermes is working"})
             time.sleep(1.5)
+            # The reply streams in a few words at a time, as the phone relays Hermes' deltas.
+            words = STREAMED.split(" ")
+            for n in range(3, len(words) + 3, 4):
+                send({"Type": 12, "SessionId": sid, "Text": " ".join(words[:n])})
+                time.sleep(0.5)
             send({"Type": 6, "SessionId": sid, "State": 3, "Detail": "Reply received"})
-            send({"Type": 4, "SessionId": sid, "MessageId": "5", "Title": "Watch chat",
-                  "Text": "Noted: " + named.get("Text", ""), "Flags": 0})
+            send({"Type": 4, "SessionId": sid, "MessageId": "6", "Title": "Watch chat", "Text": STREAMED, "Flags": 0})
+            MESSAGES.append((str(len(MESSAGES) + 1), 0, named.get("Text", ""), 0))
+            MESSAGES.append((str(len(MESSAGES) + 1), 1, STREAMED, 0))
+            send_messages(sid)
         elif cmd in (6, 9):
             if named.get("Route") == 1:
                 send({"Type": 5, "MessageId": named["MessageId"], "State": 1, "Detail": "Playing on phone speaker"})
@@ -169,4 +186,6 @@ def main(platform, headphones):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "basalt", "headphones" in sys.argv[2:])
+    flags = sys.argv[2:]
+    quick = next((int(f.split("=")[1]) for f in flags if f.startswith("quick=")), 0)
+    main(sys.argv[1] if len(sys.argv) > 1 else "basalt", "headphones" in flags, "alert" in flags, quick)

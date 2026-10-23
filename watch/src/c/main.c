@@ -15,6 +15,7 @@ static void prv_init(void) {
     .playback_changed = ui_playback_changed,
     .session_opened = ui_session_opened,
     .audio_changed = ui_audio_changed,
+    .stream_changed = ui_stream_changed,
     .reply_received = ui_reply_received,
   });
   wspk_init(ui_playback_changed);

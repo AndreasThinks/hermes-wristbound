@@ -3,12 +3,12 @@
 // Watch <-> Android AppMessage protocol. Keep in sync with
 // android/app/src/main/java/dev/wristbound/companion/pebble/Protocol.kt and docs/PROTOCOL.md.
 
-#define PROTO_VERSION 4
+#define PROTO_VERSION 5
 
 // Watch -> phone commands (MESSAGE_KEY_Cmd)
 typedef enum {
-  CMD_HELLO = 1,         // TextBudget, ProtoVersion, Filter, SessionId (last selected, optional)
-  CMD_LIST_SESSIONS = 2, // Filter
+  CMD_HELLO = 1,         // TextBudget, ProtoVersion, SessionId (last selected, optional)
+  CMD_LIST_SESSIONS = 2,
   CMD_OPEN_SESSION = 3,  // SessionId
   CMD_SEND = 4,          // SessionId, Text
   CMD_NEW_SESSION = 5,   // Text (first message)
@@ -17,7 +17,7 @@ typedef enum {
   CMD_RESUME = 8,        // Route
   CMD_REPLAY = 9,        // SessionId, MessageId, Route
   CMD_STOP = 10,
-  CMD_LIST_AUDIO = 11,   // Filter
+  CMD_LIST_AUDIO = 11,
   CMD_OPEN_REPLY = 12,   // SessionId, MessageId; answered with a REPLY flagged REQUESTED
   CMD_PLAY_WATCH = 13,   // SessionId, MessageId, TextBudget (largest PCM chunk the inbox takes)
   CMD_AUDIO_PULL = 14,   // MessageId, Offset (bytes received), Length (room for this many more)
@@ -37,6 +37,8 @@ typedef enum {
   TYPE_AUDIO_START = 9,    // MessageId, Length (PCM bytes; 0 = failed), State (PCM format), Detail
   TYPE_AUDIO_DATA = 10,    // MessageId, Offset, Data
   TYPE_AUDIO_ROUTE = 11,   // State (1 = headphones connected to the phone)
+  TYPE_STREAM = 12,        // SessionId, Text: the reply so far, while Hermes writes it
+  TYPE_CONFIG = 13,        // State (QuickLaunch): watch options, set in the phone app
 } MessageType;
 
 typedef enum {
@@ -95,7 +97,3 @@ typedef enum {
 // Recent audio flags
 #define AUDIO_FLAG_NEW      (1 << 0)
 #define AUDIO_FLAG_TELEGRAM (1 << 1)
-
-// Filter: whether Telegram-origin sessions are listed
-#define FILTER_EXCLUDE_TELEGRAM 0
-#define FILTER_INCLUDE_TELEGRAM 1

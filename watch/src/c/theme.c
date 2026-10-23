@@ -44,6 +44,22 @@ void theme_draw_header(GContext *ctx, const Layer *cell, const char *text, GColo
   menu_cell_basic_header_draw(ctx, cell, text);
 }
 
+void theme_draw_label(GContext *ctx, GRect rect, const char *text, GColor color,
+                      GTextAlignment align) {
+  rect.origin.y -= LABEL_Y + 1;
+  graphics_context_set_text_color(ctx, color);
+  graphics_draw_text(ctx, text, s_label_font, rect, GTextOverflowModeTrailingEllipsis, align, NULL);
+}
+
+int theme_draw_mark(GContext *ctx, GPoint left_mid, uint8_t marks, GColor color) {
+  if (!marks) {
+    return 0;
+  }
+  graphics_context_set_fill_color(ctx, color);
+  graphics_fill_rect(ctx, GRect(left_mid.x, left_mid.y - 4, 4, 8), 0, GCornerNone);
+  return 4 + MARK_GAP;
+}
+
 void theme_draw_row(GContext *ctx, const Layer *cell, const char *title, const char *subtitle,
                     uint8_t marks) {
   char sub[80];
@@ -56,8 +72,8 @@ void theme_draw_row(GContext *ctx, const Layer *cell, const char *title, const c
 
 #else
 
-void theme_draw_header(GContext *ctx, const Layer *cell, const char *text, GColor color) {
-  GRect b = layer_get_bounds(cell);
+void theme_draw_label(GContext *ctx, GRect rect, const char *text, GColor color,
+                      GTextAlignment align) {
   // The pixel font is ASCII only: a session title or phone message with anything else in it
   // keeps its own case in Gothic.
   char upper[64];
@@ -70,22 +86,41 @@ void theme_draw_header(GContext *ctx, const Layer *cell, const char *text, GColo
   }
   upper[i] = '\0';
   GFont font = s_label_font;
-  int y = LABEL_Y;
   if (!ascii) {
     font = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
-    y = -1;
+    rect.origin.y -= LABEL_Y + 1;
   }
+  graphics_context_set_text_color(ctx, color);
+  graphics_draw_text(ctx, ascii ? upper : text, font, rect, GTextOverflowModeTrailingEllipsis,
+                     align, NULL);
+}
+
+void theme_draw_header(GContext *ctx, const Layer *cell, const char *text, GColor color) {
+  GRect b = layer_get_bounds(cell);
   graphics_context_set_fill_color(ctx, THEME_BG);
   graphics_fill_rect(ctx, b, 0, GCornerNone);
-  graphics_context_set_text_color(ctx, color);
-  graphics_draw_text(ctx, ascii ? upper : text, font,
-                     GRect(ROW_INSET, y, b.size.w - 2 * ROW_INSET, b.size.h),
-                     GTextOverflowModeTrailingEllipsis,
-                     PBL_IF_ROUND_ELSE(GTextAlignmentCenter, GTextAlignmentLeft), NULL);
+  theme_draw_label(ctx, GRect(ROW_INSET, LABEL_Y, b.size.w - 2 * ROW_INSET, b.size.h - LABEL_Y), text,
+                   color, PBL_IF_ROUND_ELSE(GTextAlignmentCenter, GTextAlignmentLeft));
 }
 
 static const uint8_t MINI_WAVE[] = { 4, 8, 6, 9, 3 };
 #define MINI_WAVE_W ((int)ARRAY_LENGTH(MINI_WAVE) * 3 - 1)
+
+int theme_draw_mark(GContext *ctx, GPoint left_mid, uint8_t marks, GColor color) {
+  graphics_context_set_fill_color(ctx, color);
+  if (marks & THEME_MARK_WAVE) {
+    for (int i = 0; i < (int)ARRAY_LENGTH(MINI_WAVE); i++) {
+      int h = MINI_WAVE[i];
+      graphics_fill_rect(ctx, GRect(left_mid.x + i * 3, left_mid.y - h / 2, 2, h), 0, GCornerNone);
+    }
+    return MINI_WAVE_W + MARK_GAP;
+  }
+  if (marks & THEME_MARK_NEW) {
+    graphics_fill_rect(ctx, GRect(left_mid.x, left_mid.y - 4, 4, 8), 0, GCornerNone);
+    return 4 + MARK_GAP;
+  }
+  return 0;
+}
 
 void theme_draw_row(GContext *ctx, const Layer *cell, const char *title, const char *subtitle,
                     uint8_t marks) {

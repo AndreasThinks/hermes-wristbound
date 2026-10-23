@@ -11,6 +11,7 @@ typedef struct {
   void (*playback_changed)(void);
   void (*session_opened)(void);
   void (*audio_changed)(void);
+  void (*stream_changed)(void);
   void (*reply_received)(const char *session_id, const char *message_id,
                          const char *title, const char *text, uint8_t flags);
 } CommHandlers;

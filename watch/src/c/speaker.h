@@ -22,7 +22,11 @@ typedef enum {
 
 void wspk_init(void (*changed)(void));
 void wspk_deinit(void);
+#if defined(WATCH_SPEAKER)
 bool wspk_supported(void);
+#else
+#define wspk_supported() false // a constant, so callers compile their speaker rows out
+#endif
 
 void wspk_play(const char *session_id, const char *message_id);
 void wspk_pause(void);

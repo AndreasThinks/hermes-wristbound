@@ -20,7 +20,9 @@ static int s_reveal;
 
 static void prv_close(void) {
   if (s_window && window_stack_contains_window(s_window)) {
-    window_stack_remove(s_window, true);
+    // Round: a cut, not the slide. With 0.5's larger app the animated pop from the picture
+    // hung the chalk emulator; the cut does not, and other windows still slide.
+    window_stack_remove(s_window, PBL_IF_ROUND_ELSE(false, true));
   }
 }
 
