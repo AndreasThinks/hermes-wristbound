@@ -12,12 +12,14 @@ It speaks the AppMessage protocol from docs/PROTOCOL.md with canned data: no Her
     pebble emu-button click select --emulator basalt
     pebble screenshot --emulator basalt
 
-The emulator's pypkjs port is read from pebble-tool's state file (/tmp/pb-emulator.json).
+The pypkjs port is read from pebble-tool's state file in the active temporary directory.
 """
 import json
 import math
 import queue
+import os
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -58,7 +60,8 @@ TONE = bytes(int(100 * math.sin(2 * math.pi * 440 * i / 8000)) & 0xFF for i in r
 
 
 def main(platform, headphones, alert, quick, approve=False):
-    state = json.load(open("/tmp/pb-emulator.json"))[platform]
+    with open(os.path.join(tempfile.gettempdir(), "pb-emulator.json")) as state_file:
+        state = json.load(state_file)[platform]
     port = next(iter(state.values()))["pypkjs"]["port"]
     pebble = PebbleConnection(WebsocketTransport(f"ws://localhost:{port}/"))
     pebble.connect()
