@@ -52,7 +52,7 @@ Credentials are encrypted in Android Keystore-backed storage and bound to the is
 
 Install Wristbound through its Pebble Store listing. Alternatively download `wristbound-vX.Y.Z.pbw` from the same GitHub release and open it with the Pebble Android app.
 
-**Use matching phone/watch versions.** Version 0.4.0 uses protocol v4; later versions use protocol v5. Updating only one side can result in an Update watch or phone app warning. Installing a watch update with the same UUID replaces the old version; there is no need to remove it first.
+**Use matching phone/watch versions.** Version 0.4.0 uses protocol v4; version 0.5.0 uses protocol v5. Updating only one side can result in an Update watch or phone app warning. Installing a watch update with the same UUID replaces the old version; there is no need to remove it first.
 
 Open Wristbound on the watch. The home screen has New session, Continue (the last session), Recent audio and Sessions. A session opens as one scrolling conversation: Select replies by dictation where supported or a quick reply, and a reply shows there as Hermes writes it. Hold Select for playback, Newest and Refresh. Watch options are set in the companion app, under Watch.
 
@@ -68,7 +68,13 @@ Playback actions:
 - **Play on phone speaker:** explicitly requests the phone speaker, including with headphones connected. This new routing behavior still needs broader hardware testing.
 - **Play on watch speaker:** explicit streaming to a supported watch speaker. This experimental route uses low-bandwidth audio, is capped at two minutes and may buffer. Audible output/throughput has not yet been confirmed on the physical watch in this project's acceptance tests.
 
-Retained Hermes-generated audio is played as the selected reply's audio. When only text is available, supported phone paths may generate speech again and label it accordingly. Telegram's automatic voice replies may not be retained in the transcript; Wristbound cannot recover deleted media. The Android fallback-TTS file path has a single-request engine length limit for long replies.
+Only retained Hermes-generated audio is playable. Text-only replies have no Play actions: Wristbound no longer generates substitute read-aloud speech. Telegram's automatic voice replies may not be retained in the transcript; Wristbound cannot recover deleted media. If an audio attachment cannot be fetched, playback reports an error rather than substituting another voice.
+
+## Approvals
+
+For a turn started from Wristbound, Hermes may ask before running a command. On supported watches this appears as an approval card; **Deny is selected first**. Up/Down chooses an offered scope, and Select answers. Back dismisses the card without approving it; the conversation lets you reopen it. If the watch app is closed or the model cannot show the card, use the phone notification.
+
+Only approve a command you can fully understand. A watch screen can truncate long details: use the phone or desktop when there is not enough context. **Allow session** and **Always allow** are broader than **Allow once**. Request cancellation or turn completion closes pending prompts. Clarifications, password/sudo/secret prompts and other unsupported requests still need a capable desktop client. Approval handling for turns started elsewhere stays with that surface. Real backend approval round trips remain a hardware acceptance check, not a claim established by the unit tests.
 
 ## 6. Quick Launch
 
