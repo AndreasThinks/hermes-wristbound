@@ -38,7 +38,6 @@ Credentials are stored encrypted with an Android Keystore key and never sent to 
 | Send a turn | `prompt.submit {session_id, text, queued: true}` | Acks `{"status":"streaming"}`, or `"queued"` if a turn is already running there. `queued: true` waits behind that turn; without it Hermes' default is to redirect the running turn. |
 | Turn events | `message.start`, `message.delta`, `tool.start`, `tool.complete`, `message.complete` | `message.complete` carries `text` and `status` (`complete`, `error`, `interrupted`). Approval, clarification and secret prompts arrive as server requests (`approval.request`, ...). The watch says "Needs an answer on desktop"; it cannot answer them. |
 | Hermes-generated audio | `GET /api/files/stream?path=<server path>` | Streams the file a `MEDIA:<path>` tag names (the text-to-speech tool writes them under `~/.hermes/cache/audio/`). Audio extensions only. The desktop and Hermes-Relay use the same managed-files routes. See the audio contract below. |
-| Read a reply aloud in Hermes' voice | `POST /api/audio/speak {text}` | Runs the `tts:` provider chain from Hermes' config on the text and returns a `data:` URL. This is **new** speech, not any audio Hermes sent earlier; the desktop's read-aloud uses it the same way. |
 
 ## Audio contract
 
@@ -46,7 +45,7 @@ What a client can and cannot get, from the Hermes source:
 
 - **Text-to-speech tool output** (the agent calls `text_to_speech`). The tool writes the file under `~/.hermes/cache/audio/` and returns `MEDIA:<path>` in its tool result, which is stored in the transcript; the agent usually repeats the tag in its reply. This is the original audio, and the companion fetches it with `/api/files/stream`.
 - **Automatic voice replies** (Telegram voice mode, or auto-TTS after a voice note). `gateway/run_voice.py` `_send_voice_reply` synthesises to a temp file, hands it to the platform adapter, then deletes it in a `finally` block. No transcript row or `MEDIA:` tag records it. **No client can retrieve this audio**, the desktop included; it exists only in the Telegram chat. Getting it would need a Hermes change that keeps the file and records a `MEDIA:` reference for it.
-- **`/api/audio/speak`** synthesises the reply text again. It is labelled on the watch as "Hermes voice, read again", and never counts as a reply "having audio" for alerts.
+- **`/api/audio/speak`** synthesises the reply text again (the desktop's read-aloud). It is new speech, not audio Hermes sent, so Wristbound does not use it: only a reply with its own `MEDIA:` audio offers Play, and a text reply is never read aloud.
 
 How the companion decides which audio belongs to which reply (`SessionMapper.replies`):
 

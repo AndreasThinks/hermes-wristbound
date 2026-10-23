@@ -65,11 +65,6 @@ class Settings(context: Context) : BoundCredentialStore {
 
     val isConfigured: Boolean get() = credentials != null
 
-    /** Prefer Hermes' own voice (its `tts:` config) when a reply has no attached audio. */
-    var hermesVoice: Boolean
-        get() = prefs.getBoolean("hermes_voice", true)
-        set(v) = prefs.edit().putBoolean("hermes_voice", v).apply()
-
     var includeTelegram: Boolean
         get() = prefs.getBoolean("include_telegram", true)
         set(v) = prefs.edit().putBoolean("include_telegram", v).apply()

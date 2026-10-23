@@ -17,7 +17,7 @@ Android companion (android/app/src/main/java/dev/wristbound/companion)
   core/      TurnRunner (submit, recover, at-most-once), SessionMapper, Alerts (one policy),
              Settings, LocalState (bounded cache and polling checkpoints)
   hermes/    DashboardAuth (PKCE, password, browser, session token), DashboardClient, Gateway (WebSocket JSON-RPC)
-  playback/  PlaybackController (Hermes audio, Hermes voice, phone voice; pause on disconnect)
+  playback/  PlaybackController (Hermes audio only; pause on disconnect)
   sync/      SyncService (background polling), BootReceiver
   notify/    Notifier and ActionReceiver (phone notification mirrored to the Pebble)
   ui/        MainActivity (connection and settings)
@@ -96,7 +96,7 @@ Answered in code, still to confirm on devices:
 - Hermes API coverage and authentication: the dashboard and gateway socket cover sessions, history, submission, events and audio ([HERMES_API.md](HERMES_API.md)).
 - Continuing Telegram-origin sessions: `session.resume` on the gateway, as the desktop app does; replies can be turned off per user setting.
 - Filters versus alerts: the Telegram filter changes visibility only; Telegram text and audio alerts are separate settings.
-- Audio labelling: replies with Hermes audio are labelled as audio in the alert; text replies can be read again in Hermes' voice.
+- Audio labelling: replies with Hermes audio are labelled as audio in the alert and are the only ones that offer Play; text replies are never read aloud.
 
 Still open:
 

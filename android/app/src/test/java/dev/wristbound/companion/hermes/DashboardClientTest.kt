@@ -262,16 +262,4 @@ class DashboardClientTest {
         client(MemoryStore(native("at-1"))).fetchAudio("/home/h/.hermes/cache/audio/tts 1.ogg", tmp.root)
         assertEquals(1, server.requestCount)
     }
-
-    @Test
-    fun hermesVoiceSpeaksTheReplyText() = runBlocking {
-        val mp3 = Base64.getEncoder().encodeToString("ID3-audio".toByteArray())
-        server.enqueue(MockResponse().setBody("""{"ok":true,"data_url":"data:audio/mpeg;base64,$mp3","mime_type":"audio/mpeg","provider":"edge"}"""))
-        val clip = client(MemoryStore(native("at-1"))).speak("Disk is 92% full.", "msg-4", tmp.root)
-        val req = server.takeRequest()
-        assertEquals("/api/audio/speak", req.path)
-        assertEquals("""{"text":"Disk is 92% full."}""", req.body.readUtf8())
-        assertEquals("ID3-audio", clip.file.readText())
-        assertTrue(clip.file.name.endsWith(".mp3"))
-    }
 }
