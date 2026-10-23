@@ -54,7 +54,7 @@ class TurnRunnerTest {
         var historyFailure: Exception? = null,
     ) : HermesApi {
         val opened = mutableListOf<FakeGateway>()
-        override suspend fun listSessions(limit: Int) = emptyList<HermesSession>()
+        override suspend fun listSessions(limit: Int, excludeSources: List<String>) = emptyList<HermesSession>()
         override suspend fun recentMessages(sessionId: String, limit: Int): List<HermesMessage> {
             historyFailure?.let { throw it }
             return transcript.takeLast(limit)

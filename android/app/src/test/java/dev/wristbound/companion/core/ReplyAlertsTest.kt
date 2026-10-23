@@ -22,8 +22,9 @@ class ReplyAlertsTest {
 
     private fun msg(json: String) = HermesHttp.json.decodeFromString(HermesMessage.serializer(), json)
 
+    /** The defaults. */
     private var policy = AlertPolicy(
-        replies = true, scope = NotifyScope.ALL_ELIGIBLE, telegramText = false, telegramAudio = true, openSessionId = null,
+        enabled = true, audio = true, watchTurns = true, chats = true, messagingText = false, background = false,
     )
     private val store = MemoryStore()
     private val alerts = mutableListOf<ReplyAlert>()
@@ -124,8 +125,8 @@ class ReplyAlertsTest {
     }
 
     @Test
-    fun bothTelegramTogglesOffNeverAlertEvenForAudio() = runTest {
-        policy = policy.copy(telegramText = false, telegramAudio = false)
+    fun messagingTextAndAudioOffNeverAlertEvenForAudio() = runTest {
+        policy = policy.copy(messagingText = false, audio = false)
         session("tg", "telegram", 10.0)
         poll()
         append("tg", 20.0, user(3, 15.0), speech(4, 18.0), answer(5, 20.0))
@@ -134,7 +135,7 @@ class ReplyAlertsTest {
         poll()
         assertEquals(emptyList<ReplyAlert>(), alerts)
         // Turning audio alerts on later does not replay replies already decided.
-        policy = policy.copy(telegramAudio = true)
+        policy = policy.copy(audio = true)
         sessions["tg"] = sessions.getValue("tg").copy(last_active = 31.0)
         poll()
         assertEquals(emptyList<ReplyAlert>(), alerts)
@@ -202,20 +203,81 @@ class ReplyAlertsTest {
     }
 
     @Test
-    fun aDirectCompletionUsesTheSamePolicy() = runTest {
+    fun aReplyToAWatchTurnAlertsEvenInTelegram() = runTest {
         val tg = HermesSession("tg", source = "telegram", title = "tg")
         val d = dispatcher()
+        // Messaging text alerts are off, but this answers what was sent from the watch.
         d.turnFinished(tg, listOf(user(1, 1.0), answer(2, 2.0)))
-        assertEquals(emptyList<ReplyAlert>(), alerts) // Telegram text alerts are off
-        d.turnFinished(tg, listOf(user(3, 3.0), speech(4, 4.0), answer(5, 5.0)))
-        assertEquals(listOf("5"), alerts.map { it.messageId })
+        assertEquals(listOf("2"), alerts.map { it.messageId })
 
-        policy = policy.copy(scope = NotifyScope.OPEN_SESSION, openSessionId = "elsewhere")
+        policy = policy.copy(watchTurns = false)
         d.turnFinished(HermesSession("cli", source = "cli"), listOf(user(6, 6.0), answer(7, 7.0)))
         assertEquals(1, alerts.size)
-        policy = policy.copy(replies = false, scope = NotifyScope.ALL_ELIGIBLE)
-        d.turnFinished(HermesSession("cli", source = "cli"), listOf(user(8, 8.0), answer(9, 9.0)))
-        assertEquals(1, alerts.size)
+        // Audio follows its own switch.
+        d.turnFinished(tg, listOf(user(3, 3.0), speech(4, 4.0), answer(5, 5.0)))
+        assertEquals(listOf("2", "5"), alerts.map { it.messageId })
+        policy = policy.copy(enabled = false, watchTurns = true)
+        d.turnFinished(HermesSession("cli", source = "cli"), listOf(user(8, 8.0), speech(9, 8.5), answer(10, 9.0)))
+        assertEquals(2, alerts.size)
+    }
+
+    @Test
+    fun scheduledTextIsSilentButScheduledAudioAlerts() = runTest {
+        session("cron", "cron", 10.0)
+        poll()
+        append("cron", 20.0, user(3, 15.0, "Daily digest"), answer(4, 20.0, "Nothing new."))
+        poll()
+        assertEquals(emptyList<ReplyAlert>(), alerts)
+        append("cron", 30.0, user(5, 25.0, "Morning briefing"), speech(6, 28.0), answer(7, 30.0, "Good morning."))
+        poll()
+        assertEquals(listOf("7"), alerts.map { it.messageId })
+        assertTrue(alerts.single().hasAudio)
+    }
+
+    @Test
+    fun aBackgroundFollowUpInAChatIsSilent() = runTest {
+        session("desk", "desktop", 10.0)
+        poll()
+        append(
+            "desk", 20.0,
+            msg("""{"id":3,"role":"user","display_kind":"process_complete","content":"[Background process finished]","timestamp":15.0}"""),
+            answer(4, 20.0, "The build passed."),
+        )
+        poll()
+        assertEquals(emptyList<ReplyAlert>(), alerts)
+        // A reply to something a person wrote in the same chat still alerts.
+        append("desk", 30.0, user(5, 25.0), answer(6, 30.0))
+        poll()
+        assertEquals(listOf("6"), alerts.map { it.messageId })
+        // With background alerts on, follow-ups alert too.
+        policy = policy.copy(background = true)
+        append(
+            "desk", 40.0,
+            msg("""{"id":7,"role":"user","display_kind":"async_delegation_complete","content":"[Delegated task done]","timestamp":35.0}"""),
+            answer(8, 40.0, "Research is in."),
+        )
+        poll()
+        assertEquals(listOf("6", "8"), alerts.map { it.messageId })
+    }
+
+    @Test
+    fun chatRepliesFollowTheirSwitch() = runTest {
+        policy = policy.copy(chats = false)
+        session("cli", "cli", 10.0)
+        poll()
+        append("cli", 20.0, user(3, 15.0), answer(4, 20.0))
+        poll()
+        assertEquals(emptyList<ReplyAlert>(), alerts)
+    }
+
+    @Test
+    fun otherMessagingPlatformsFollowTheTelegramRules() = runTest {
+        session("dc", "discord", 10.0)
+        poll()
+        append("dc", 20.0, user(3, 15.0), answer(4, 20.0))
+        append("dc", 30.0, user(5, 25.0), speech(6, 28.0), answer(7, 30.0))
+        poll()
+        assertEquals(listOf("7"), alerts.map { it.messageId })
     }
 
     @Test

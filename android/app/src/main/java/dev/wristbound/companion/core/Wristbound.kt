@@ -211,9 +211,14 @@ class Wristbound private constructor(context: Context) {
 
     // -- sessions & history ---------------------------------------------------------------------
 
-    private suspend fun fetchSessions(api: HermesApi): List<HermesSession> {
+    /**
+     * Recent sessions. The watch's list leaves automation sessions out at the source with
+     * [forList], so they cannot crowd out chats; polling and Recent audio look at all of them.
+     */
+    private suspend fun fetchSessions(api: HermesApi, forList: Boolean = false): List<HermesSession> {
+        val exclude = if (forList && !settings.showAutomation) HermesSession.AUTOMATION_SOURCES else emptyList()
         val sessions = try {
-            api.listSessions(100).also { recordBackend(null) }
+            api.listSessions(100, exclude).also { recordBackend(null) }
         } catch (e: IOException) {
             recordBackend(e)
             throw e
@@ -232,8 +237,8 @@ class Wristbound private constructor(context: Context) {
         }
         try {
             val visible = SessionMapper.visibleSessions(
-                fetchSessions(api), settings.includeTelegram, state.lastSeen(), state.readOnly(), activeTurns.keys,
-                settings.allowTelegramReplies,
+                fetchSessions(api, forList = true), settings.showMessaging, state.lastSeen(), state.readOnly(), activeTurns.keys,
+                settings.allowTelegramReplies, settings.showAutomation,
             )
             state.saveSessions(visible)
             watch.send(WatchCodec.status(Protocol.Conn.OK, ""))
@@ -344,7 +349,7 @@ class Wristbound private constructor(context: Context) {
     }
 
     private suspend fun sendAudioPages(items: List<AudioItem>) {
-        val visible = AudioInbox.visible(items, settings.includeTelegram, Protocol.MAX_AUDIO)
+        val visible = AudioInbox.visible(items, settings.showMessaging, Protocol.MAX_AUDIO)
         val seen = state.lastSeen()
         val pages = if (visible.isEmpty()) listOf(WatchCodec.audioPage(0, 0, null, false))
         else visible.mapIndexed { i, item ->
@@ -470,11 +475,12 @@ class Wristbound private constructor(context: Context) {
     }
 
     private fun alertPolicy() = AlertPolicy(
-        replies = settings.notifyReplies,
-        scope = settings.notifyScope,
-        telegramText = settings.notifyTelegram,
-        telegramAudio = settings.notifyTelegramAudio,
-        openSessionId = state.openSessionId,
+        enabled = settings.notifyReplies,
+        audio = settings.alertAudio,
+        watchTurns = settings.alertWatchTurns,
+        chats = settings.alertChats,
+        messagingText = settings.alertMessagingText,
+        background = settings.alertBackground,
     )
 
     /**

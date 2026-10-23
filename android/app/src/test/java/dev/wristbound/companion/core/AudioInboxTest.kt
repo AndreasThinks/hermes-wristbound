@@ -66,8 +66,8 @@ class AudioInboxTest {
         val merged = AudioInbox.merge(old, new)
         assertEquals(listOf("12", "3"), merged.map { it.messageId })
         assertEquals(listOf("12"), AudioInbox.merge(old, new, max = 1).map { it.messageId })
-        assertEquals(listOf("12"), AudioInbox.visible(merged, includeTelegram = false, max = 10).map { it.messageId })
-        assertEquals(listOf("12", "3"), AudioInbox.visible(merged, includeTelegram = true, max = 10).map { it.messageId })
+        assertEquals(listOf("12"), AudioInbox.visible(merged, includeMessaging = false, max = 10).map { it.messageId })
+        assertEquals(listOf("12", "3"), AudioInbox.visible(merged, includeMessaging = true, max = 10).map { it.messageId })
     }
 
     @Test

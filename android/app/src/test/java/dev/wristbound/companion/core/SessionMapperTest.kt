@@ -27,6 +27,48 @@ class SessionMapperTest {
     }
 
     @Test
+    fun messagingAndAutomationSessionsAreFilteredAndPinnedComeFirst() {
+        val mixed = listOf(
+            HermesSession("cron", source = "cron", title = "Digest", last_active = 60.0),
+            HermesSession("dc", source = "discord", title = "Discord", last_active = 55.0),
+            HermesSession("kb", source = "kanban", title = "Worker", last_active = 50.0),
+            HermesSession("desk", source = "desktop", title = "Desk", last_active = 40.0),
+            HermesSession("pin", source = "cli", title = "Pinned", last_active = 5.0, pinned = true),
+        )
+        fun ids(messaging: Boolean, automation: Boolean) = SessionMapper.visibleSessions(
+            mixed, messaging, emptyMap(), emptySet(), emptySet(), includeAutomation = automation,
+        ).map { it.id }
+        assertEquals(listOf("pin", "dc", "desk"), ids(messaging = true, automation = false))
+        assertEquals(listOf("pin", "desk"), ids(messaging = false, automation = false))
+        assertEquals(listOf("pin", "cron", "dc", "kb", "desk"), ids(messaging = true, automation = true))
+    }
+
+    @Test
+    fun sourcesAreClassified() {
+        fun s(source: String?) = HermesSession("x", source = source)
+        assertTrue(s("telegram").isMessaging && s("Discord").isMessaging && s("irc").isMessaging)
+        assertTrue(s("cron").isAutomation && s("subagent").isAutomation && s("webhook").isAutomation)
+        for (local in listOf("desktop", "tui", "cli", "webui", "api_server", null)) {
+            assertFalse(s(local).isMessaging || s(local).isAutomation)
+        }
+    }
+
+    @Test
+    fun repliesToTurnsHermesStartedAreBackgroundAndItsNoticeIsNotShownAsSent() {
+        val rows = listOf(
+            msg("""{"id":1,"role":"user","content":"Run the tests","timestamp":1.0}"""),
+            msg("""{"id":2,"role":"assistant","content":"Started.","timestamp":2.0}"""),
+            msg("""{"id":3,"role":"user","display_kind":"process_complete","content":"[Background process finished]","timestamp":3.0}"""),
+            msg("""{"id":4,"role":"assistant","content":"All green.","timestamp":4.0}"""),
+            msg("""{"id":5,"role":"user","display_kind":"hidden","content":"[System: nudge]","timestamp":5.0}"""),
+        )
+        assertEquals(listOf(false, true), SessionMapper.replies(rows).map { it.background })
+        val shown = SessionMapper.watchMessages(rows, ToolActivity.HIDDEN)
+        assertEquals(listOf("1", "2", "3", "4"), shown.map { it.id })
+        assertEquals(Protocol.Role.SYSTEM, shown[2].role)
+    }
+
+    @Test
     fun flagsUnreadTelegramReadOnlyAndActive() {
         val shown = SessionMapper.visibleSessions(
             sessions, true, lastSeen = mapOf("tg" to 25.0, "api" to 20.0), readOnly = setOf("old"), active = setOf("api"),

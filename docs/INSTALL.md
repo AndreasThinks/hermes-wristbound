@@ -60,7 +60,7 @@ Open Wristbound on the watch. The home screen has New session, Continue (the las
 
 While the watch app is open, the companion checks other Hermes surfaces approximately every 30 seconds. Enable **Keep checking in the background** on the phone for checking while the watch app is closed/phone locked; Android shows a foreground-service notification. Check notification permissions and any OS battery restrictions if alerts stop.
 
-Telegram text alerts and Telegram audio alerts are independent settings. You can mute text duplicates while retaining audio alerts. First-run polling records a baseline rather than replaying all old replies as notifications; old retained audio can still be found in Recent audio.
+Alerts are set per kind of reply under **Notifications**: audio replies from any session, replies to your watch messages, replies in desktop and terminal chats, text replies in Telegram and other messaging apps (off by default, since those apps notify the phone already), and background and scheduled tasks (off by default). Settings from earlier versions carry over. Which sessions the watch lists is set separately, under **Sessions on the watch**. First-run polling records a baseline rather than replaying all old replies as notifications; old retained audio can still be found in Recent audio.
 
 Playback actions:
 
