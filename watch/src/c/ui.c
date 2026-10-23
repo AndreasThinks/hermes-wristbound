@@ -1728,8 +1728,18 @@ static char s_alert_id[MESSAGE_ID_LEN];
 static char s_alert_title[TITLE_LEN];
 static uint8_t s_alert_flags;
 static char *s_alert_text;
+// Started by the phone to show a reply: until the reply is opened, it leaves the way a
+// notification does, back to the watchface.
+static bool s_launched_for_alert;
+
+static void prv_alert_expired(void) {
+  if (s_launched_for_alert && window_stack_get_top_window() == s_main_window) {
+    window_stack_pop_all(false);
+  }
+}
 
 static void prv_alert_open(void) {
+  s_launched_for_alert = false;
   prv_open_conv_with(s_alert_session_id, s_alert_id, s_alert_title, s_alert_flags,
                      s_alert_text ? s_alert_text : "");
   free(s_alert_text);
@@ -1770,7 +1780,7 @@ void ui_reply_received(const char *session_id, const char *message_id,
   if (s_alert_text) {
     memcpy(s_alert_text, text, len + 1);
   }
-  banner_show(s_alert_title, text, flags & MESSAGE_FLAG_HAS_AUDIO, prv_alert_open);
+  banner_show(s_alert_title, text, flags & MESSAGE_FLAG_HAS_AUDIO, prv_alert_open, prv_alert_expired);
 #else
   prv_open_conv_with(session_id, message_id, title[0] ? title : "Hermes", flags, text);
 #endif
@@ -1813,6 +1823,13 @@ void ui_init(void) {
     // Straight to the shortcut, no splash; Back still lands on Home. Started once the event
     // loop runs, so dictation opens over a window that has loaded.
     app_timer_register(50, prv_quick_launch, NULL);
+    return;
+  }
+  if (launch_reason() == APP_LAUNCH_PHONE) {
+    // Opened for a reply: no splash in front of its banner.
+#if defined(BANNER_ENABLED)
+    s_launched_for_alert = true;
+#endif
     return;
   }
   splash_show();

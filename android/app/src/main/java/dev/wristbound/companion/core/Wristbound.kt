@@ -21,6 +21,7 @@ import dev.wristbound.companion.playback.AudioDecoder
 import dev.wristbound.companion.playback.PcmConverter
 import kotlinx.coroutines.withContext
 import dev.wristbound.companion.playback.PlaybackController
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,6 +41,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -74,6 +76,9 @@ class Wristbound private constructor(context: Context) {
     private class OpenApproval(val sessionId: String, val title: String, val request: ApprovalRequest, val answer: (String) -> Boolean)
     private val approvals = ConcurrentHashMap<String, OpenApproval>()
     @Volatile private var pendingReply: Pair<String, String>? = null
+    /** Completed by the next HELLO, while an alert waits for the watchapp it started. */
+    @Volatile private var helloSeen: CompletableDeferred<Unit>? = null
+    private val launchMutex = Mutex()
     @Volatile private var lastSend: Triple<String, String, Long>? = null
 
     private val activeTurns = ConcurrentHashMap<String, Job>()
@@ -197,6 +202,7 @@ class Wristbound private constructor(context: Context) {
                 }
                 // A question still waiting: the watch takes it over from the notification.
                 approvals.values.forEach { showApproval(it) }
+                helloSeen?.complete(Unit)
             }
             WatchCommand.ListSessions -> pushSessions()
             is WatchCommand.OpenSession -> openSession(cmd.sessionId)
@@ -542,8 +548,8 @@ class Wristbound private constructor(context: Context) {
     )
 
     /**
-     * Show one decided alert: on the open watchapp, otherwise as a phone notification (which
-     * the Pebble mirrors). Returns whether it reached the user: the watch acknowledged the card,
+     * Show one decided alert: on the open watchapp (started for it, if so set), otherwise as a
+     * phone notification (which the Pebble mirrors). Returns whether it reached the user: the watch acknowledged the card,
      * or a notification was posted. A watch that does not acknowledge is treated as closed, so
      * a missed close event cannot swallow alerts, and the phone notification is used instead.
      */
@@ -555,7 +561,7 @@ class Wristbound private constructor(context: Context) {
             if (!watchOpen) notifier.reply(sessionId, alert.messageId, alert.title, Text.forWatch(alert.text), settings.privatePreviews, alert.hasAudio, true)
             return true
         }
-        if (watchOpen) {
+        if (watchOpen || (settings.openForAlerts && launchForAlert())) {
             if (sendReplyToWatch(sessionId, alert.messageId, alert.text, alert.hasAudio)) {
                 Log.i(TAG, "alert ${alert.messageId}: shown on watch")
                 sessionsById[sessionId]?.let { if (state.openSessionId == sessionId) state.markSeen(sessionId, it.activity) }
@@ -591,6 +597,21 @@ class Wristbound private constructor(context: Context) {
     }
 
     suspend fun openWatchApp(): Boolean = watch.startApp()
+
+    /**
+     * Start the watchapp so an alert shows as its banner rather than a mirrored notification.
+     * True once the watchapp said hello; false if it could not be started or stayed silent.
+     */
+    private suspend fun launchForAlert(): Boolean = launchMutex.withLock {
+        if (watchOpen) return true
+        val seen = CompletableDeferred<Unit>().also { helloSeen = it }
+        try {
+            Log.i(TAG, "starting the watchapp for an alert")
+            watch.startApp() && withTimeoutOrNull(LAUNCH_TIMEOUT_MS) { seen.await() } != null
+        } finally {
+            helloSeen = null
+        }
+    }
 
     /** A watch option changed in the companion app: tell an open watchapp now. */
     fun onWatchSettingsChanged() {
@@ -762,6 +783,8 @@ class Wristbound private constructor(context: Context) {
         private const val NEW_SESSION_TARGET = "\u0000new"
         private const val MAX_AUDIO_FILES = 24
         const val FOREGROUND_POLL_SECONDS = 30
+        /** How long a started watchapp has to say hello before the alert goes to a notification. */
+        const val LAUNCH_TIMEOUT_MS = 10_000L
 
         @Volatile private var instance: Wristbound? = null
 

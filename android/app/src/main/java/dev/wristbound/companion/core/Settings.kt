@@ -121,6 +121,11 @@ class Settings(context: Context) : BoundCredentialStore {
         get() = prefs.getBoolean("alert_background", false)
         set(v) = prefs.edit().putBoolean("alert_background", v).apply()
 
+    /** Start the watchapp to show an alert as its own banner, instead of a phone notification. */
+    var openForAlerts: Boolean
+        get() = prefs.getBoolean("open_for_alerts", false)
+        set(v) = prefs.edit().putBoolean("open_for_alerts", v).apply()
+
     var toolActivity: ToolActivity
         get() = enumValueOrDefault(prefs.getString("tool_activity", null), ToolActivity.HIDDEN)
         set(v) = prefs.edit().putString("tool_activity", v.name).apply()
