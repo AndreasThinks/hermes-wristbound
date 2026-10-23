@@ -458,7 +458,6 @@ const char *wspk_label_for(const char *message_id) {
 
 void wspk_init(void (*changed)(void)) {}
 void wspk_deinit(void) {}
-bool wspk_supported(void) { return false; }
 void wspk_play(const char *session_id, const char *message_id) {}
 void wspk_pause(void) {}
 void wspk_resume(void) {}

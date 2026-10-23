@@ -11,6 +11,8 @@ import dev.wristbound.companion.hermes.HermesMessage
 import dev.wristbound.companion.hermes.HermesSession
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -27,11 +29,26 @@ class TurnRunnerTest {
     ) : Gateway {
         val channel = Channel<GatewayEvent>(Channel.UNLIMITED)
         val calls = mutableListOf<Pair<String, JsonObject>>()
+        var capabilities: JsonObject? = null
+        val answers = mutableListOf<Pair<String, JsonObject>>()
+        val declines = mutableListOf<Pair<String, Int>>()
         override val events get() = channel
 
         override suspend fun call(method: String, params: JsonObject, timeoutMs: Long, onSent: () -> Unit): JsonObject {
+            if (method == "client.capabilities") {
+                capabilities = params
+                return JsonObject(emptyMap())
+            }
             calls += method to params
             return answer(method, params, onSent)
+        }
+
+        override fun answer(requestId: String, result: JsonObject): Boolean { answers += requestId to result; return true }
+
+        override fun decline(requestId: String, code: Int, message: String): Boolean { declines += requestId to code; return true }
+
+        fun ask(method: String, id: String, params: JsonObject, sid: String = "rt1") {
+            channel.trySend(GatewayEvent(method, sid, params, requestId = id))
         }
 
         fun emit(type: String, payload: JsonObject = JsonObject(emptyMap()), sid: String = "rt1") {
@@ -52,7 +69,7 @@ class TurnRunnerTest {
         var historyFailure: Exception? = null,
     ) : HermesApi {
         val opened = mutableListOf<FakeGateway>()
-        override suspend fun listSessions(limit: Int) = emptyList<HermesSession>()
+        override suspend fun listSessions(limit: Int, excludeSources: List<String>) = emptyList<HermesSession>()
         override suspend fun recentMessages(sessionId: String, limit: Int): List<HermesMessage> {
             historyFailure?.let { throw it }
             return transcript.takeLast(limit)
@@ -68,6 +85,7 @@ class TurnRunnerTest {
         for ((k, v) in pairs) when (v) {
             is String -> put(k, v)
             is Boolean -> put(k, v)
+            is JsonElement -> put(k, v)
             else -> put(k, v.toString())
         }
     }
@@ -96,12 +114,16 @@ class TurnRunnerTest {
             emit("message.start")
             emit("tool.start", obj("tool_id" to "t1", "name" to "terminal"))
             emit("message.delta", obj("text" to "All"))
+            emit("message.delta", obj("text" to JsonNull))
+            emit("message.delta", obj("text" to " good"))
             emit("message.complete", obj("text" to "All good", "status" to "complete"))
         }
         val api = FakeApi(mutableListOf(gateway))
-        val outcome = TurnRunner(api).run("tg_123", "hi", onProgress = { _, _ -> }, onTool = { tools += it })
+        val deltas = mutableListOf<String?>()
+        val outcome = TurnRunner(api).run("tg_123", "hi", onProgress = { _, _ -> }, onTool = { tools += it }, onDelta = { deltas += it })
         assertEquals(TurnOutcome.Completed("All good"), outcome)
         assertEquals(listOf("terminal"), tools)
+        assertEquals(listOf("All", null, " good"), deltas)
         val (resume, submit) = gateway.calls
         assertEquals("session.resume", resume.first)
         assertEquals("tg_123", resume.second["session_id"]!!.jsonPrimitive.content)
@@ -110,6 +132,37 @@ class TurnRunnerTest {
         assertEquals("rt1", submit.second["session_id"]!!.jsonPrimitive.content)
         assertEquals("hi", submit.second["text"]!!.jsonPrimitive.content)
         assertEquals(JsonPrimitive(true), submit.second["queued"])
+    }
+
+    @Test
+    fun approvalsReachTheUserAndTheirAnswerGoesBack() = runTest {
+        val asked = mutableListOf<ApprovalRequest>()
+        val closed = mutableListOf<String>()
+        val gateway = scripted {
+            emit("message.start")
+            ask("approval", "srq-1", buildJsonObject {
+                put("command", "rm -rf build")
+                put("description", "Delete the build folder")
+                put("choices", kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive("once"), JsonPrimitive("session"), JsonPrimitive("deny"))))
+            })
+            ask("clarify", "srq-2", buildJsonObject { put("question", "Which one?") })
+            emit("request.cancel", obj("id" to "srq-1", "method" to "approval"))
+            emit("message.complete", obj("text" to "Done", "status" to "complete"))
+        }
+        val api = FakeApi(mutableListOf(gateway))
+        val outcome = TurnRunner(api).run(
+            "tg_123", "hi", onProgress = { _, _ -> },
+            onApproval = { request, answer -> asked += request; answer("once") },
+            onApprovalClosed = { closed += it },
+        )
+        assertEquals(TurnOutcome.Completed("Done"), outcome)
+        // The phone said it answers Hermes' questions, or none would arrive.
+        assertEquals(JsonPrimitive(true), gateway.capabilities!!["server_requests"])
+        assertEquals(listOf(ApprovalRequest("srq-1", "rm -rf build", "Delete the build folder", listOf("once", "session", "deny"))), asked)
+        assertEquals(listOf("srq-1" to obj("choice" to "once")), gateway.answers)
+        // What the watch cannot answer is left to the desktop, not refused.
+        assertEquals(listOf("srq-2" to Gateway.NOT_SHOWN), gateway.declines)
+        assertEquals(listOf("srq-1"), closed)
     }
 
     @Test

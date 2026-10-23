@@ -5,28 +5,54 @@ import dev.wristbound.companion.hermes.HermesSession
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 
+/** What a reply answers, which decides the switch that governs its alert. */
+enum class ReplyKind {
+    /** A turn sent from the watch. */
+    WATCH_TURN,
+    /** A chat on this machine: the desktop, terminal, web UI or API. */
+    CHAT,
+    /** A chat on a messaging platform, which notifies the phone itself. */
+    MESSAGING,
+    /** A scheduled or automation session, or a turn Hermes started itself. */
+    BACKGROUND,
+}
+
 /**
  * Which replies alert, read from settings once per decision. Every delivery path (a turn sent
  * from the watch, background polling, recovery after a dropped socket) goes through this.
  * Nothing here ever starts playback: an alert only offers Play.
+ *
+ * A reply that carries Hermes audio is governed by [audio] alone, from any session: listening
+ * is what the watch is for. A text reply is governed by its kind's switch.
  */
 data class AlertPolicy(
-    val replies: Boolean,
-    val scope: NotifyScope,
-    /** Text alerts for Telegram sessions; off by default so Telegram does not double-notify. */
-    val telegramText: Boolean,
-    /** Alerts for Telegram replies that carry Hermes audio, even with [telegramText] off. */
-    val telegramAudio: Boolean,
-    val openSessionId: String?,
+    /** Master switch. */
+    val enabled: Boolean,
+    val audio: Boolean,
+    val watchTurns: Boolean,
+    val chats: Boolean,
+    /** Text alerts for messaging chats; off by default so Telegram and the like do not double-notify. */
+    val messagingText: Boolean,
+    val background: Boolean,
 ) {
-    private fun inScope(session: HermesSession) = when (scope) {
-        NotifyScope.ALL_ELIGIBLE -> true
-        NotifyScope.OPEN_SESSION -> session.id == openSessionId
+    fun textAlerts(kind: ReplyKind) = enabled && when (kind) {
+        ReplyKind.WATCH_TURN -> watchTurns
+        ReplyKind.CHAT -> chats
+        ReplyKind.MESSAGING -> messagingText
+        ReplyKind.BACKGROUND -> background
     }
 
-    fun textAlerts(session: HermesSession) = replies && inScope(session) && (!session.isTelegram || telegramText)
+    val audioAlerts: Boolean get() = enabled && audio
 
-    fun audioAlerts(session: HermesSession) = replies && inScope(session) && (!session.isTelegram || telegramAudio)
+    companion object {
+        /** The kind of [reply] in [session]; [watchTurn] when it answers a turn sent from the watch. */
+        fun kindOf(session: HermesSession, reply: SessionMapper.Reply, watchTurn: Boolean): ReplyKind = when {
+            session.isAutomation || reply.background -> ReplyKind.BACKGROUND
+            watchTurn -> ReplyKind.WATCH_TURN
+            session.isMessaging -> ReplyKind.MESSAGING
+            else -> ReplyKind.CHAT
+        }
+    }
 }
 
 /** One reply to show, on the open watchapp or as a phone notification. */
@@ -86,7 +112,7 @@ class ReplyAlerts(
      * Only answers after the last user row count, so older history never alerts here.
      */
     suspend fun turnFinished(session: HermesSession, messages: List<HermesMessage>) {
-        for (reply in SessionMapper.latestTurnReplies(messages)) consider(session, reply, floor = null)
+        for (reply in SessionMapper.latestTurnReplies(messages)) consider(session, reply, floor = null, watchTurn = true)
     }
 
     /**
@@ -123,7 +149,7 @@ class ReplyAlerts(
                     continue
                 }
                 var delivered = true
-                for (reply in SessionMapper.replies(messages)) delivered = consider(session, reply, floor) && delivered
+                for (reply in SessionMapper.replies(messages)) delivered = consider(session, reply, floor, watchTurn = false) && delivered
                 // An alert that reached nobody keeps the checkpoint, so the next pass retries it.
                 if (delivered) cursors[session.id] = session.activity
             }
@@ -137,9 +163,9 @@ class ReplyAlerts(
      * Replies at or before [floor] predate the checkpoint; only their late audio still counts.
      * Returns false when an alert was due but could not be delivered (and will be retried).
      */
-    private suspend fun consider(session: HermesSession, reply: SessionMapper.Reply, floor: Double?): Boolean {
+    private suspend fun consider(session: HermesSession, reply: SessionMapper.Reply, floor: Double?, watchTurn: Boolean): Boolean {
         if (floor != null && !store.isAlerted(reply.id) && (reply.message.timestamp ?: Double.MAX_VALUE) <= floor + EPSILON) return true
-        val decision = decide(session, reply, policy()) ?: return true
+        val decision = decide(session, reply, policy(), AlertPolicy.kindOf(session, reply, watchTurn)) ?: return true
         if (deliver(decision.alert)) {
             synchronized(failures) { failures.remove(reply.id) }
             return true
@@ -154,7 +180,7 @@ class ReplyAlerts(
     data class Decision(val alert: ReplyAlert, val marked: List<String>)
 
     /** The alert for [reply], if any, recording it so it is never decided twice. */
-    fun decide(session: HermesSession, reply: SessionMapper.Reply, policy: AlertPolicy): Decision? {
+    fun decide(session: HermesSession, reply: SessionMapper.Reply, policy: AlertPolicy, kind: ReplyKind): Decision? {
         val audioKey = AUDIO_PREFIX + reply.id
         fun alert(silent: Boolean, marked: List<String>) =
             Decision(ReplyAlert(session.id, session.displayTitle, reply.id, reply.message.text, reply.hasAudio, silent), marked)
@@ -164,17 +190,15 @@ class ReplyAlerts(
             // when it is already there.
             if (reply.hasAudio) store.markAlerted(audioKey)
             val marked = if (reply.hasAudio) listOf(reply.id, audioKey) else listOf(reply.id)
-            return when {
-                policy.textAlerts(session) -> alert(silent = false, marked)
-                reply.hasAudio && policy.audioAlerts(session) -> alert(silent = false, marked)
-                else -> null
-            }
+            val due = if (reply.hasAudio) policy.audioAlerts else policy.textAlerts(kind)
+            return if (due) alert(silent = false, marked) else null
         }
         // Seen before: only newly arrived audio matters.
         if (!reply.hasAudio || !store.markAlerted(audioKey)) return null
         return when {
-            policy.textAlerts(session) -> alert(silent = true, listOf(audioKey))
-            policy.audioAlerts(session) -> alert(silent = false, listOf(audioKey))
+            // The text already alerted: add Play to it without alerting again.
+            policy.textAlerts(kind) -> alert(silent = true, listOf(audioKey))
+            policy.audioAlerts -> alert(silent = false, listOf(audioKey))
             else -> null
         }
     }

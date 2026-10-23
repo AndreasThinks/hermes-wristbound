@@ -9,22 +9,26 @@ import dev.wristbound.companion.pebble.Text
 object SessionMapper {
 
     /**
-     * Sessions visible on the watch. The Telegram filter controls visibility only; alerts are
-     * decided separately by [AlertPolicy]. With [telegramReplies] off, Telegram sessions are
-     * marked read-only: still readable and playable, but not sendable.
+     * Sessions visible on the watch: pinned first, then most recent. Messaging chats show with
+     * [includeMessaging], and scheduled and automation sessions only with [includeAutomation].
+     * These control visibility only; alerts are decided separately by [AlertPolicy]. With
+     * [telegramReplies] off, Telegram sessions are marked read-only: still readable and
+     * playable, but not sendable.
      */
     fun visibleSessions(
         sessions: List<HermesSession>,
-        includeTelegram: Boolean,
+        includeMessaging: Boolean,
         lastSeen: Map<String, Double>,
         readOnly: Set<String>,
         active: Set<String>,
         telegramReplies: Boolean = true,
+        includeAutomation: Boolean = false,
     ): List<WatchSession> = sessions
         .asSequence()
         .filter { it.archived != true && it.hidden != true && it.is_internal_child != true }
-        .filter { includeTelegram || !it.isTelegram }
-        .sortedByDescending { it.activity }
+        .filter { includeMessaging || !it.isMessaging }
+        .filter { includeAutomation || !it.isAutomation }
+        .sortedWith(compareByDescending<HermesSession> { it.pinned == true }.thenByDescending { it.activity })
         .take(Protocol.MAX_SESSIONS)
         .map { s ->
             var flags = 0
@@ -58,6 +62,11 @@ object SessionMapper {
             .mapIndexedNotNull { i, m ->
                 val reply = replies[i]
                 when {
+                    // Scaffolding Hermes never shows.
+                    m.display_kind == "hidden" -> null
+                    // Hermes' own notice that starts a background turn: shown small, not as something you sent.
+                    m.opensBackgroundTurn && m.text.isNotBlank() ->
+                        WatchMessage(m.stableId, Protocol.Role.SYSTEM, 0, Text.forWatch(m.text))
                     m.role == "user" && m.text.isNotBlank() ->
                         WatchMessage(m.stableId, Protocol.Role.USER, 0, Text.forWatch(m.text))
                     reply != null -> WatchMessage(
@@ -75,8 +84,11 @@ object SessionMapper {
             .takeLast(Protocol.MAX_MESSAGES)
     }
 
-    /** One final answer at [index] in a message list, with the audio Hermes made for it. */
-    data class Reply(val index: Int, val message: HermesMessage, val audio: List<String>) {
+    /**
+     * One final answer at [index] in a message list, with the audio Hermes made for it.
+     * [background] marks an answer to a turn Hermes started itself (see [HermesMessage.opensBackgroundTurn]).
+     */
+    data class Reply(val index: Int, val message: HermesMessage, val audio: List<String>, val background: Boolean = false) {
         val id: String get() = message.stableId
         val hasAudio: Boolean get() = audio.isNotEmpty()
     }
@@ -103,7 +115,7 @@ object SessionMapper {
         while (start < messages.size) {
             var end = start
             while (end < messages.size && messages[end].role != "user") end++
-            if (end > start) out += turnReplies(messages, start, end, userFiles)
+            if (end > start) out += turnReplies(messages, start, end, userFiles, messages.getOrNull(start - 1)?.opensBackgroundTurn == true)
             start = end + 1
         }
         return out
@@ -115,7 +127,7 @@ object SessionMapper {
         return replies(messages).filter { it.index > lastUser }
     }
 
-    private fun turnReplies(messages: List<HermesMessage>, start: Int, end: Int, userFiles: Set<String>): List<Reply> {
+    private fun turnReplies(messages: List<HermesMessage>, start: Int, end: Int, userFiles: Set<String>, background: Boolean): List<Reply> {
         val finals = (start until end).filter { messages[it].isFinalAssistantText }
         val answers = finals.filter { Text.forSpeech(Text.forWatch(messages[it].text)).isNotBlank() }
             .ifEmpty { listOfNotNull(finals.lastOrNull()) }
@@ -128,7 +140,7 @@ object SessionMapper {
                 .flatMap { it.audioRefs }
                 .filter { it.substringAfterLast('/').let { name -> name !in userFiles && !INBOUND_AUDIO.matches(name) } }
                 .distinct()
-            Reply(index, messages[index], audio)
+            Reply(index, messages[index], audio, background)
         }
     }
 

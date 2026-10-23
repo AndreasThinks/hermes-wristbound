@@ -65,32 +65,61 @@ class Settings(context: Context) : BoundCredentialStore {
 
     val isConfigured: Boolean get() = credentials != null
 
-    var includeTelegram: Boolean
+    /**
+     * What the watchapp opens on ([dev.wristbound.companion.pebble.Protocol.QuickLaunch]), or
+     * null until it is chosen here: the watch's own earlier choice is then adopted on HELLO.
+     */
+    var quickLaunch: Int?
+        get() = prefs.getInt("quick_launch", -1).takeIf { it >= 0 }
+        set(v) = prefs.edit().apply { if (v == null) remove("quick_launch") else putInt("quick_launch", v) }.apply()
+
+    /** Show chats from Telegram and other messaging platforms on the watch. */
+    var showMessaging: Boolean
         get() = prefs.getBoolean("include_telegram", true)
         set(v) = prefs.edit().putBoolean("include_telegram", v).apply()
 
-    var notifyReplies: Boolean
-        get() = prefs.getBoolean("notify_replies", true)
-        set(v) = prefs.edit().putBoolean("notify_replies", v).apply()
-
-    /** Text alerts for Telegram sessions. Off by default: Telegram already notifies the phone. */
-    var notifyTelegram: Boolean
-        get() = prefs.getBoolean("notify_telegram", false)
-        set(v) = prefs.edit().putBoolean("notify_telegram", v).apply()
-
-    /** Alert for Telegram replies that carry Hermes audio, even with [notifyTelegram] off. */
-    var notifyTelegramAudio: Boolean
-        get() = prefs.getBoolean("notify_telegram_audio", true)
-        set(v) = prefs.edit().putBoolean("notify_telegram_audio", v).apply()
+    /** Show scheduled and automation sessions (cron, Kanban workers, webhooks…) on the watch. */
+    var showAutomation: Boolean
+        get() = prefs.getBoolean("show_automation", false)
+        set(v) = prefs.edit().putBoolean("show_automation", v).apply()
 
     /** Allow sending from the watch into Telegram sessions. Off keeps them read and play only. */
     var allowTelegramReplies: Boolean
         get() = prefs.getBoolean("allow_telegram_replies", true)
         set(v) = prefs.edit().putBoolean("allow_telegram_replies", v).apply()
 
-    var notifyScope: NotifyScope
-        get() = enumValueOrDefault(prefs.getString("notify_scope", null), NotifyScope.ALL_ELIGIBLE)
-        set(v) = prefs.edit().putString("notify_scope", v.name).apply()
+    // Alerts, one switch per kind of reply (see AlertPolicy). Each new switch starts from the
+    // setting it replaces, so an upgrade keeps what the user chose.
+
+    /** Master switch for reply alerts. */
+    var notifyReplies: Boolean
+        get() = prefs.getBoolean("notify_replies", true)
+        set(v) = prefs.edit().putBoolean("notify_replies", v).apply()
+
+    /** Replies that carry Hermes audio, from any session. */
+    var alertAudio: Boolean
+        get() = prefs.getBoolean("alert_audio", prefs.getBoolean("notify_telegram_audio", true))
+        set(v) = prefs.edit().putBoolean("alert_audio", v).apply()
+
+    /** Replies to messages sent from the watch. */
+    var alertWatchTurns: Boolean
+        get() = prefs.getBoolean("alert_watch_turns", true)
+        set(v) = prefs.edit().putBoolean("alert_watch_turns", v).apply()
+
+    /** Replies in chats on the desktop, terminal or web UI. Off if alerts were limited to the open session. */
+    var alertChats: Boolean
+        get() = prefs.getBoolean("alert_chats", prefs.getString("notify_scope", null) != "OPEN_SESSION")
+        set(v) = prefs.edit().putBoolean("alert_chats", v).apply()
+
+    /** Text replies in Telegram and other messaging chats. Off by default: those apps notify the phone already. */
+    var alertMessagingText: Boolean
+        get() = prefs.getBoolean("alert_messaging_text", prefs.getBoolean("notify_telegram", false))
+        set(v) = prefs.edit().putBoolean("alert_messaging_text", v).apply()
+
+    /** Replies in scheduled and automation sessions, and to turns Hermes started itself. */
+    var alertBackground: Boolean
+        get() = prefs.getBoolean("alert_background", false)
+        set(v) = prefs.edit().putBoolean("alert_background", v).apply()
 
     var toolActivity: ToolActivity
         get() = enumValueOrDefault(prefs.getString("tool_activity", null), ToolActivity.HIDDEN)

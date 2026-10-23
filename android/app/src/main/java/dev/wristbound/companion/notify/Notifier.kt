@@ -29,6 +29,11 @@ class Notifier(private val context: Context) {
             },
         )
         nm.createNotificationChannel(
+            NotificationChannel(CH_APPROVALS, "Approvals", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Hermes asking before a step, such as running a command"
+            },
+        )
+        nm.createNotificationChannel(
             NotificationChannel(CH_TOOLS, "Tool activity", NotificationManager.IMPORTANCE_LOW).apply {
                 description = "Tools Hermes is using (only when enabled in settings)"
             },
@@ -77,6 +82,31 @@ class Notifier(private val context: Context) {
         builder.addAction(0, "Read on watch", action(ActionReceiver.ACTION_OPEN_ON_WATCH, sessionId, messageId))
         return post(messageId.hashCode(), builder.build())
     }
+
+    /**
+     * Hermes asking before a step, with its answers as actions so it can be answered from the
+     * Pebble. Always alerts, whatever the reply settings say: Hermes is stopped until it is answered.
+     */
+    fun approval(sessionId: String, requestId: String, title: String, text: String, choices: List<String>): Boolean {
+        val builder = NotificationCompat.Builder(context, CH_APPROVALS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setColor(ContextCompat.getColor(context, R.color.phosphor_signal))
+            .setContentTitle("Hermes asks: $title")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setContentIntent(openApp())
+        for (choice in choices) {
+            val label = APPROVAL_LABELS[choice] ?: continue
+            builder.addAction(0, label, action(ActionReceiver.ACTION_APPROVE, sessionId, requestId, choice))
+        }
+        return post(requestId.hashCode(), builder.build())
+    }
+
+    fun clearApproval(requestId: String) = manager.cancel(requestId.hashCode())
 
     /**
      * Whether a notification on [channel] can be shown: the permission is granted, the app's
@@ -133,13 +163,14 @@ class Notifier(private val context: Context) {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 
-    private fun action(action: String, sessionId: String, messageId: String): PendingIntent {
+    private fun action(action: String, sessionId: String, messageId: String, choice: String? = null): PendingIntent {
         val intent = Intent(context, ActionReceiver::class.java)
             .setAction(action)
             .putExtra(ActionReceiver.EXTRA_SESSION, sessionId)
             .putExtra(ActionReceiver.EXTRA_MESSAGE, messageId)
+        choice?.let { intent.putExtra(ActionReceiver.EXTRA_CHOICE, it) }
         return PendingIntent.getBroadcast(
-            context, (action + messageId).hashCode(), intent,
+            context, (action + messageId + choice.orEmpty()).hashCode(), intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
     }
@@ -149,8 +180,13 @@ class Notifier(private val context: Context) {
         const val CH_TOOLS = "tools"
         const val CH_ERRORS = "errors"
         const val CH_SYNC = "sync"
+        const val CH_APPROVALS = "approvals"
         const val SYNC_ID = 1
         private const val TOOL_ID = 2
         private const val ERROR_ID = 3
+        /** Pebble shows these as the notification's actions. */
+        private val APPROVAL_LABELS = mapOf(
+            "once" to "Allow once", "session" to "Allow this session", "always" to "Always allow", "deny" to "Deny",
+        )
     }
 }

@@ -34,8 +34,17 @@ data class HermesSession(
     @Serializable(with = SessionFlag::class) val archived: Boolean? = null,
     @Serializable(with = SessionFlag::class) val hidden: Boolean? = null,
     @Serializable(with = SessionFlag::class) val is_internal_child: Boolean? = null,
+    @Serializable(with = SessionFlag::class) val pinned: Boolean? = null,
 ) {
     val isTelegram: Boolean get() = source.equals("telegram", ignoreCase = true)
+
+    private val sourceKey: String? get() = source?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+
+    /** Started by a schedule, a webhook, a worker or another agent rather than by someone chatting. */
+    val isAutomation: Boolean get() = sourceKey in AUTOMATION_SOURCES
+
+    /** A chat on a messaging platform (Telegram, Discord, Slack, Signal, WhatsApp, email, SMS…). */
+    val isMessaging: Boolean get() = sourceKey.let { it != null && it !in LOCAL_SOURCES && it !in AUTOMATION_SOURCES }
 
     val displayTitle: String
         get() = title?.takeIf { it.isNotBlank() }
@@ -44,6 +53,13 @@ data class HermesSession(
 
     /** Most recent activity, for unread tracking. */
     val activity: Double get() = last_active ?: ended_at ?: started_at ?: 0.0
+
+    companion object {
+        /** Hermes session sources that are not someone chatting, as `exclude_sources` takes them. */
+        val AUTOMATION_SOURCES = listOf("cron", "kanban", "webhook", "msgraph_webhook", "oneshot", "tool", "acp", "bot_room", "subagent")
+        /** Chats on this machine: the desktop, terminal, web UI and API. Any other source is a messaging platform. */
+        val LOCAL_SOURCES = setOf("desktop", "tui", "cli", "webui", "api_server", "local")
+    }
 }
 
 /**
@@ -86,7 +102,16 @@ data class HermesMessage(
     val tool_calls: JsonElement? = null,
     val timestamp: Double? = null,
     val finish_reason: String? = null,
+    /** How Hermes shows a row; set on rows Hermes wrote itself, such as a finished background task's notice. */
+    val display_kind: String? = null,
 ) {
+    /**
+     * A user row Hermes wrote to start a turn of its own (a background process finished, a
+     * delegated task reported back), rather than something a person sent.
+     */
+    val opensBackgroundTurn: Boolean
+        get() = role == "user" && display_kind in BACKGROUND_TURN_KINDS
+
     /** Hermes message ids are integers today; keep them opaque strings on our side. */
     val stableId: String
         get() = (id as? JsonPrimitive)?.contentOrNull
@@ -179,3 +204,6 @@ data class NativeTokens(
     val provider: String = "",
     val user_id: String = "",
 )
+
+/** `display_kind`s of the user rows Hermes writes to start a turn of its own. */
+private val BACKGROUND_TURN_KINDS = setOf("internal_notification", "process_complete", "async_delegation_complete")

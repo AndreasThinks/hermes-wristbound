@@ -11,7 +11,8 @@ import java.util.concurrent.TimeUnit
 
 /** The Hermes operations a turn needs. [DashboardClient] is the real implementation. */
 interface HermesApi {
-    suspend fun listSessions(limit: Int = 50): List<HermesSession>
+    /** Most recently active sessions, leaving out any whose source is in [excludeSources]. */
+    suspend fun listSessions(limit: Int = 50, excludeSources: List<String> = emptyList()): List<HermesSession>
 
     /** Most recent [limit] messages of a session, oldest first. */
     suspend fun recentMessages(sessionId: String, limit: Int): List<HermesMessage>
@@ -40,10 +41,11 @@ class DashboardClient(
     // OkHttp's own pings keep NAT and the tailnet path warm; the gateway adds its JSON heartbeat.
     private val wsHttp = http.newBuilder().pingInterval(20, TimeUnit.SECONDS).readTimeout(0, TimeUnit.SECONDS).build()
 
-    override suspend fun listSessions(limit: Int): List<HermesSession> = withContext(Dispatchers.IO) {
+    override suspend fun listSessions(limit: Int, excludeSources: List<String>): List<HermesSession> = withContext(Dispatchers.IO) {
         val url = url("api/sessions") {
             addQueryParameter("limit", limit.coerceIn(1, 100).toString())
             addQueryParameter("order", "recent")
+            if (excludeSources.isNotEmpty()) addQueryParameter("exclude_sources", excludeSources.joinToString(","))
         }
         HermesHttp.decode(SessionList.serializer(), get(url), "a session list").sessions
     }

@@ -46,7 +46,6 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import dev.wristbound.companion.R
 import dev.wristbound.companion.core.Account
-import dev.wristbound.companion.core.NotifyScope
 import dev.wristbound.companion.core.ToolActivity
 import dev.wristbound.companion.core.Wristbound
 import dev.wristbound.companion.hermes.Credentials
@@ -58,6 +57,7 @@ import dev.wristbound.companion.hermes.HermesProtocolException
 import dev.wristbound.companion.hermes.LoopbackReceiver
 import dev.wristbound.companion.hermes.SignInException
 import dev.wristbound.companion.notify.Notifier
+import dev.wristbound.companion.pebble.Protocol
 import dev.wristbound.companion.sync.SyncService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -113,31 +113,61 @@ class MainActivity : AppCompatActivity() {
         column.addView(heading("Watch"))
         watchStatus = note("")
         column.addView(watchStatus)
-        column.addView(switch("Show Telegram sessions", s.includeTelegram) { s.includeTelegram = it })
-        column.addView(switch("Allow replies to Telegram sessions", s.allowTelegramReplies) { s.allowTelegramReplies = it })
-        column.addView(note("Off keeps Telegram sessions read-only on the watch: you can still read and play replies, and answer in Telegram."))
+        column.addView(spinner("Watchapp opens on", QUICK_LAUNCH_CHOICES, s.quickLaunch ?: Protocol.QuickLaunch.HOME) {
+            // The first callback only reports the initial selection: keep the watch's own choice until one is made here.
+            if (s.quickLaunch != null || it != Protocol.QuickLaunch.HOME) {
+                s.quickLaunch = it
+                controller.onWatchSettingsChanged()
+            }
+        })
         column.addView(switch("Show tool activity on watch", s.toolActivity != ToolActivity.HIDDEN) {
             s.toolActivity = if (it) ToolActivity.SILENT else ToolActivity.HIDDEN
         })
         column.addView(button("Open Wristbound on watch", primary = false) { lifecycleScope.launch { controller.openWatchApp() } })
+
+        column.addView(heading("Sessions on the watch"))
+        column.addView(switch("Show messaging chats", s.showMessaging) {
+            s.showMessaging = it
+            controller.onWatchSettingsChanged()
+        })
+        column.addView(note("Telegram, Discord, Slack, Signal, WhatsApp, email and other messaging platforms."))
+        column.addView(switch("Show scheduled & automation sessions", s.showAutomation) {
+            s.showAutomation = it
+            controller.onWatchSettingsChanged()
+        })
+        column.addView(note("Cron jobs, Kanban workers, webhooks and subagents. Pinned sessions always come first."))
+        column.addView(switch("Allow replies to Telegram sessions", s.allowTelegramReplies) {
+            s.allowTelegramReplies = it
+            controller.onWatchSettingsChanged()
+        })
+        column.addView(note("Off keeps Telegram sessions read-only on the watch: you can still read and play replies, and answer in Telegram."))
 
         column.addView(heading("Notifications"))
         notificationStatus = note("")
         column.addView(notificationStatus)
         notificationButton = button("Allow notifications") { fixNotifications() }
         column.addView(notificationButton)
-        column.addView(switch("Notify final replies", s.notifyReplies) { s.notifyReplies = it })
-        column.addView(switch("Also notify for Telegram sessions", s.notifyTelegram) { s.notifyTelegram = it })
-        column.addView(switch("Notify Telegram replies with Hermes audio", s.notifyTelegramAudio) { s.notifyTelegramAudio = it })
-        column.addView(note("Telegram text alerts are off by default so Telegram and Wristbound do not both alert for the same reply. A Telegram reply that carries audio Hermes generated can still alert once here, so you can play it from the watch. Nothing plays until you press Play."))
+        val kinds = listOf(
+            switch("Audio replies", s.alertAudio) { s.alertAudio = it },
+            note("Alert whenever Hermes sends a voice reply, from any session."),
+            switch("Replies to my watch messages", s.alertWatchTurns) { s.alertWatchTurns = it },
+            switch("Replies in chats", s.alertChats) { s.alertChats = it },
+            note("Chats on the desktop, terminal or web UI."),
+            switch("Text replies in Telegram & messaging", s.alertMessagingText) { s.alertMessagingText = it },
+            note("Off by default: those apps already notify your phone."),
+            switch("Background & scheduled tasks", s.alertBackground) { s.alertBackground = it },
+            note("Cron jobs and automation sessions, and Hermes following up on its own background work."),
+        )
+        column.addView(switch("Notifications", s.notifyReplies) { on ->
+            s.notifyReplies = on
+            kinds.forEach { it.isEnabled = on }
+        })
+        kinds.forEach { it.isEnabled = s.notifyReplies; column.addView(it) }
+        column.addView(note("Alerts show on the open watchapp, or as a phone notification the Pebble mirrors. Nothing plays until you press Play."))
         column.addView(switch("Notify when Hermes uses a tool", s.toolActivity == ToolActivity.NOTIFY) {
             s.toolActivity = if (it) ToolActivity.NOTIFY else ToolActivity.SILENT
         })
         column.addView(switch("Hide reply text in notifications", s.privatePreviews) { s.privatePreviews = it })
-        column.addView(spinner("Alert for", listOf("All eligible sessions", "Only the open session"),
-            if (s.notifyScope == NotifyScope.ALL_ELIGIBLE) 0 else 1) {
-            s.notifyScope = if (it == 0) NotifyScope.ALL_ELIGIBLE else NotifyScope.OPEN_SESSION
-        })
 
         column.addView(heading("Checking for replies"))
         monitoring = note("")
@@ -572,5 +602,7 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val TAG = "WristboundSetup"
+        /** In [Protocol.QuickLaunch] order. */
+        val QUICK_LAUNCH_CHOICES = listOf("Home", "Dictate a new session", "Recent audio", "Play latest audio", "Last session")
     }
 }

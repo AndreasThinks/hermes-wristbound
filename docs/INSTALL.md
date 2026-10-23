@@ -52,15 +52,15 @@ Credentials are encrypted in Android Keystore-backed storage and bound to the is
 
 Install Wristbound through its Pebble Store listing. Alternatively download `wristbound-vX.Y.Z.pbw` from the same GitHub release and open it with the Pebble Android app.
 
-**Use matching phone/watch versions.** Version 0.4.0 uses protocol v4. Updating only one side can result in an Update watch or phone app warning. Installing a watch update with the same UUID replaces the old version; there is no need to remove it first.
+**Use matching phone/watch versions.** Version 0.4.0 uses protocol v4; version 0.5.0 uses protocol v5. Updating only one side can result in an Update watch or phone app warning. Installing a watch update with the same UUID replaces the old version; there is no need to remove it first.
 
-Open Wristbound on the watch. Recent audio and New session are at the top, followed by sessions and an Options section. Open a conversation to read history, dictate where supported or use a quick reply.
+Open Wristbound on the watch. The home screen has New session, Continue (the last session), Recent audio and Sessions. A session opens as one scrolling conversation: Select replies by dictation where supported or a quick reply, and a reply shows there as Hermes writes it. Hold Select for playback, Newest and Refresh. Watch options are set in the companion app, under Watch.
 
 ## 5. Incoming replies and audio
 
 While the watch app is open, the companion checks other Hermes surfaces approximately every 30 seconds. Enable **Keep checking in the background** on the phone for checking while the watch app is closed/phone locked; Android shows a foreground-service notification. Check notification permissions and any OS battery restrictions if alerts stop.
 
-Telegram text alerts and Telegram audio alerts are independent settings. You can mute text duplicates while retaining audio alerts. First-run polling records a baseline rather than replaying all old replies as notifications; old retained audio can still be found in Recent audio.
+Alerts are set per kind of reply under **Notifications**: audio replies from any session, replies to your watch messages, replies in desktop and terminal chats, text replies in Telegram and other messaging apps (off by default, since those apps notify the phone already), and background and scheduled tasks (off by default). Settings from earlier versions carry over. Which sessions the watch lists is set separately, under **Sessions on the watch**. First-run polling records a baseline rather than replaying all old replies as notifications; old retained audio can still be found in Recent audio.
 
 Playback actions:
 
@@ -68,21 +68,27 @@ Playback actions:
 - **Play on phone speaker:** explicitly requests the phone speaker, including with headphones connected. This new routing behavior still needs broader hardware testing.
 - **Play on watch speaker:** explicit streaming to a supported watch speaker. This experimental route uses low-bandwidth audio, is capped at two minutes and may buffer. Audible output/throughput has not yet been confirmed on the physical watch in this project's acceptance tests.
 
-Retained Hermes-generated audio is played as the selected reply's audio. When only text is available, supported phone paths may generate speech again and label it accordingly. Telegram's automatic voice replies may not be retained in the transcript; Wristbound cannot recover deleted media. The Android fallback-TTS file path has a single-request engine length limit for long replies.
+Only retained Hermes-generated audio is playable. Text-only replies have no Play actions: Wristbound no longer generates substitute read-aloud speech. Telegram's automatic voice replies may not be retained in the transcript; Wristbound cannot recover deleted media. If an audio attachment cannot be fetched, playback reports an error rather than substituting another voice.
+
+## Approvals
+
+For a turn started from Wristbound, Hermes may ask before running a command. On supported watches this appears as an approval card; **Deny is selected first**. Up/Down chooses an offered scope, and Select answers. Back dismisses the card without approving it; the conversation lets you reopen it. If the watch app is closed or the model cannot show the card, use the phone notification.
+
+Only approve a command you can fully understand. A watch screen can truncate long details: use the phone or desktop when there is not enough context. **Allow session** and **Always allow** are broader than **Allow once**. Request cancellation or turn completion closes pending prompts. Clarifications, password/sudo/secret prompts and other unsupported requests still need a capable desktop client. Approval handling for turns started elsewhere stays with that surface. Real backend approval round trips remain a hardware acceptance check, not a claim established by the unit tests.
 
 ## 6. Quick Launch
 
-First assign Wristbound to a Quick Launch button using the supported Pebble watch/phone settings. Then, **inside Wristbound on the watch**, scroll below the session list to **Options > Quick launch**. Press Select to cycle through:
+First assign Wristbound to a Quick Launch button using the supported Pebble watch/phone settings. Then, **in the Wristbound companion app**, choose under **Watch > Watchapp opens on**:
 
-- Main menu
-- Dictate new session
+- Home
+- Dictate a new session
 - Recent audio
 - Play latest audio
 - Last session
 
-The subtitle shows the saved choice. There is no separate picker screen yet. The destination setting is currently on the watch, not the Android companion; moving it to the companion is tracked in [issue #15](https://github.com/AndreasThinks/hermes-wristbound/issues/15).
+The watch is told at once if the watchapp is open, otherwise the next time it opens. A choice made on the watch in 0.4.0 is kept until you pick one in the companion app.
 
-It only affects actual hardware Quick Launch starts, not normal launches. **Play latest audio deliberately plays through headphones when connected, otherwise the phone speaker.** Pick Main menu or Recent audio for a silent shortcut. Ordinary incoming replies do not autoplay.
+It only affects actual hardware Quick Launch starts, not normal launches. **Play latest audio deliberately plays through headphones when connected, otherwise the phone speaker.** Pick Home or Recent audio for a silent shortcut. Ordinary incoming replies do not autoplay.
 
 ## Troubleshooting
 
@@ -92,7 +98,7 @@ It only affects actual hardware Quick Launch starts, not normal launches. **Play
 | Watch stays Connecting | Matching APK/PBW versions, Pebble Bluetooth link, companion installed and signed in; use Test connection on the phone. |
 | No incoming alert | Monitoring state, background switch when closed, permissions, text/audio policy, and a new reply after the initial baseline. |
 | Audio marker but no sound | Open the reply's action menu and explicitly choose an output. Audio markers alone do not start playback. |
-| Quick launch seems absent | It is below all sessions in the watch Options section; the phone does not configure it yet. |
+| Quick launch seems absent | It is in the companion app under Watch > Watchapp opens on, not on the watch. |
 | APK will not update | Read the signing-certificate warning above; preserve data/sign-in before any uninstall. |
 
 Report bugs at [GitHub Issues](https://github.com/AndreasThinks/hermes-wristbound/issues), including watch model/firmware, Android and app versions, exact action, and the visible error. Do not post passwords, tokens, cookies or private conversation content in public issues.

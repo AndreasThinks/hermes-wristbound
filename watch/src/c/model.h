@@ -3,7 +3,6 @@
 #include <pebble.h>
 #include "protocol.h"
 
-#define MAX_MESSAGES 12
 #define SESSION_ID_LEN 72
 #define MESSAGE_ID_LEN 40
 #define TITLE_LEN 48
@@ -13,11 +12,13 @@
 // Aplite's heap shares 24 KB with the code and these lists: fewer rows leave room for the
 // reply card and its action menu.
 #if defined(PBL_PLATFORM_APLITE)
-#define MAX_SESSIONS 12
-#define MAX_AUDIO 5
+#define MAX_SESSIONS 8
+#define MAX_AUDIO 3
+#define MAX_MESSAGES 8
 #else
 #define MAX_SESSIONS 20
 #define MAX_AUDIO 15
+#define MAX_MESSAGES 12
 #endif
 
 // Per-message text budget the phone truncates to. Aplite has a much smaller heap.
@@ -51,9 +52,9 @@ typedef struct {
   uint8_t flags;
 } AudioItem;
 
-// What a Quick Launch shortcut to the app does.
+// What a Quick Launch shortcut to the app does. Chosen in the phone app (TYPE_CONFIG).
 typedef enum {
-  QUICK_MAIN_MENU = 0,
+  QUICK_HOME = 0,
   QUICK_DICTATE,      // a new session, straight into dictation
   QUICK_RECENT_AUDIO,
   QUICK_PLAY_LATEST,  // open the newest Recent audio reply and play it
@@ -65,7 +66,6 @@ typedef struct {
   ConnState conn;
   char conn_detail[DETAIL_LEN];
 
-  bool include_telegram;
   QuickLaunch quick_launch;
   bool headphones; // headphones are connected to the phone
   Session sessions[MAX_SESSIONS];
@@ -82,6 +82,10 @@ typedef struct {
   Message messages[MAX_MESSAGES];
   int message_count;
   bool messages_loading;
+  // Shown after the history until it catches up: what the user just sent, and Hermes' reply as
+  // it streams in. Both heap allocated, owned by the model.
+  char *outgoing;
+  char *stream;
 
   SubmitState submit;
   char submit_detail[DETAIL_LEN];
@@ -96,6 +100,10 @@ extern Model g_model;
 void model_init(void);
 void model_deinit(void);
 void model_clear_messages(void);
+void model_truncate_messages(int count);
+void model_set_outgoing(const char *text);
+void model_set_stream(const char *text);
+void model_clear_pending(void);
 void model_set_message(int index, const char *id, uint8_t role, uint8_t flags, const char *text);
 const Session *model_find_session(const char *id);
 

@@ -9,8 +9,8 @@ import io.rebble.pebblekit2.common.model.PebbleDictionaryItem
 
 /** Commands decoded from watch AppMessages. */
 sealed class WatchCommand {
-    data class Hello(val textBudget: Int, val protoVersion: Int, val includeTelegram: Boolean, val sessionId: String?) : WatchCommand()
-    data class ListSessions(val includeTelegram: Boolean) : WatchCommand()
+    data class Hello(val textBudget: Int, val protoVersion: Int, val quickLaunch: Int?, val sessionId: String?, val approvals: Boolean = false) : WatchCommand()
+    data object ListSessions : WatchCommand()
     data class OpenSession(val sessionId: String) : WatchCommand()
     data class Send(val sessionId: String, val text: String) : WatchCommand()
     data class NewSession(val text: String) : WatchCommand()
@@ -19,13 +19,15 @@ sealed class WatchCommand {
     data object Pause : WatchCommand()
     data class Resume(val speaker: Boolean) : WatchCommand()
     data object Stop : WatchCommand()
-    data class ListAudio(val includeTelegram: Boolean) : WatchCommand()
+    data object ListAudio : WatchCommand()
     data class OpenReply(val sessionId: String, val messageId: String) : WatchCommand()
     /** Play one reply on the watch's own speaker; [chunkBytes] is the most PCM one message can carry. */
     data class PlayOnWatch(val sessionId: String, val messageId: String, val chunkBytes: Int) : WatchCommand()
     /** The watch has room for [length] more bytes of [messageId]'s PCM, starting at [offset]. */
     data class AudioPull(val messageId: String, val offset: Int, val length: Int) : WatchCommand()
     data class AudioStop(val messageId: String) : WatchCommand()
+    /** The user's answer to approval [requestId]: one of [Protocol.APPROVAL_CHOICES]. */
+    data class Approve(val sessionId: String, val requestId: String, val choice: String) : WatchCommand()
 }
 
 /** Pure encoding/decoding between the protocol and PebbleKit dictionaries. */
@@ -49,10 +51,11 @@ object WatchCodec {
             Protocol.Cmd.HELLO -> WatchCommand.Hello(
                 textBudget = int(Key.TEXT_BUDGET) ?: Protocol.DEFAULT_TEXT_BUDGET,
                 protoVersion = int(Key.PROTO_VERSION) ?: 0,
-                includeTelegram = (int(Key.FILTER) ?: 1) != 0,
+                quickLaunch = int(Key.STATE)?.takeIf { it in 0 until Protocol.QuickLaunch.COUNT },
                 sessionId = str(Key.SESSION_ID)?.takeIf { it.isNotEmpty() },
+                approvals = ((int(Key.FLAGS) ?: 0) and Protocol.HelloFlag.APPROVALS) != 0,
             )
-            Protocol.Cmd.LIST_SESSIONS -> WatchCommand.ListSessions((int(Key.FILTER) ?: 1) != 0)
+            Protocol.Cmd.LIST_SESSIONS -> WatchCommand.ListSessions
             Protocol.Cmd.OPEN_SESSION -> str(Key.SESSION_ID)?.let { WatchCommand.OpenSession(it) }
             Protocol.Cmd.SEND -> {
                 val sid = str(Key.SESSION_ID)
@@ -73,7 +76,7 @@ object WatchCodec {
             Protocol.Cmd.PAUSE -> WatchCommand.Pause
             Protocol.Cmd.RESUME -> WatchCommand.Resume(speaker())
             Protocol.Cmd.STOP -> WatchCommand.Stop
-            Protocol.Cmd.LIST_AUDIO -> WatchCommand.ListAudio((int(Key.FILTER) ?: 1) != 0)
+            Protocol.Cmd.LIST_AUDIO -> WatchCommand.ListAudio
             Protocol.Cmd.PLAY_WATCH -> {
                 val sid = str(Key.SESSION_ID)?.takeIf { it.isNotEmpty() } ?: return null
                 val mid = str(Key.MESSAGE_ID)?.takeIf { it.isNotEmpty() } ?: return null
@@ -86,6 +89,12 @@ object WatchCodec {
                 WatchCommand.AudioPull(mid, offset, length)
             }
             Protocol.Cmd.AUDIO_STOP -> str(Key.MESSAGE_ID)?.let { WatchCommand.AudioStop(it) }
+            Protocol.Cmd.APPROVE -> {
+                val sid = str(Key.SESSION_ID).orEmpty()
+                val rid = str(Key.MESSAGE_ID)?.takeIf { it.isNotEmpty() } ?: return null
+                val choice = Protocol.APPROVAL_CHOICES.getOrNull(int(Key.STATE) ?: -1) ?: return null
+                WatchCommand.Approve(sid, rid, choice)
+            }
             Protocol.Cmd.OPEN_REPLY -> {
                 val sid = str(Key.SESSION_ID)?.takeIf { it.isNotEmpty() } ?: return null
                 val mid = str(Key.MESSAGE_ID)?.takeIf { it.isNotEmpty() } ?: return null
@@ -180,6 +189,37 @@ object WatchCodec {
         )
     }
 
+    /** The reply so far in [sessionId], while Hermes is still writing it. */
+    fun stream(sessionId: String, textSoFar: String, textBudget: Int): PebbleDictionary = mapOf(
+        Key.TYPE to u8(Protocol.Type.STREAM),
+        Key.SESSION_ID to text(sessionId, Protocol.SESSION_ID_BUDGET),
+        Key.TEXT to PebbleDictionaryItem.Text(Text.fit(textSoFar, textBudget).first),
+    )
+
+    /**
+     * Hermes asking before a step, or ([closed]) that question settled. [choices] are Hermes'
+     * answer names; the watch always offers Deny.
+     */
+    fun approval(sessionId: String, requestId: String, title: String, text: String, choices: List<String>, closed: Boolean, textBudget: Int): PebbleDictionary {
+        var bits = 0
+        choices.forEach { c -> Protocol.APPROVAL_CHOICES.indexOf(c).takeIf { it >= 0 }?.let { bits = bits or (1 shl it) } }
+        return mapOf(
+            Key.TYPE to u8(Protocol.Type.APPROVAL),
+            Key.SESSION_ID to text(sessionId, Protocol.SESSION_ID_BUDGET),
+            Key.MESSAGE_ID to text(requestId, Protocol.MESSAGE_ID_BUDGET),
+            Key.TITLE to text(title, Protocol.TITLE_BUDGET),
+            Key.TEXT to PebbleDictionaryItem.Text(Text.fit(text, minOf(textBudget, APPROVAL_TEXT_BUDGET)).first),
+            Key.FLAGS to u8(bits),
+            Key.STATE to u8(if (closed) 1 else 0),
+        )
+    }
+
+    /** Watch settings that live in the companion app. */
+    fun config(quickLaunch: Int): PebbleDictionary = mapOf(
+        Key.TYPE to u8(Protocol.Type.CONFIG),
+        Key.STATE to u8(quickLaunch.coerceIn(0, Protocol.QuickLaunch.COUNT - 1)),
+    )
+
     fun playback(messageId: String?, state: Protocol.Playback, detail: String): PebbleDictionary = mapOf(
         Key.TYPE to u8(Protocol.Type.PLAYBACK),
         Key.MESSAGE_ID to text(messageId.orEmpty(), Protocol.MESSAGE_ID_BUDGET),
@@ -200,6 +240,9 @@ object WatchCodec {
         Key.TITLE to text(session.title, Protocol.TITLE_BUDGET),
         Key.FLAGS to u8(session.flags),
     )
+
+    /** The approval card shows about this much (watch/src/c/approval.c TEXT_CAP). */
+    private const val APPROVAL_TEXT_BUDGET = 480
 
     private fun u8(v: Int) = PebbleDictionaryItem.UInt8(v.coerceIn(0, 255).toUByte())
 

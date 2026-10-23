@@ -42,7 +42,7 @@ object AudioInbox {
                 sessionTitle = Text.forWatch(session.displayTitle),
                 preview = Text.fit(Text.forWatch(r.message.text).replace('\n', ' '), PREVIEW).first,
                 timestamp = r.message.timestamp ?: session.activity,
-                telegram = session.isTelegram,
+                telegram = session.isMessaging,
             )
         }
 
@@ -58,6 +58,6 @@ object AudioInbox {
     }
 
     /** What the watch lists: Telegram items only when Telegram sessions are shown. */
-    fun visible(items: List<AudioItem>, includeTelegram: Boolean, max: Int): List<AudioItem> =
-        items.filter { includeTelegram || !it.telegram }.take(max)
+    fun visible(items: List<AudioItem>, includeMessaging: Boolean, max: Int): List<AudioItem> =
+        items.filter { includeMessaging || !it.telegram }.take(max)
 }

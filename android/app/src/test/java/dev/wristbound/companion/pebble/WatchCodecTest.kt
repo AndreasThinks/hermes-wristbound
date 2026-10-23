@@ -15,9 +15,39 @@ class WatchCodecTest {
     fun decodesHello() {
         val cmd = WatchCodec.decode(
             mapOf(Key.CMD to u8(1), Key.TEXT_BUDGET to PebbleDictionaryItem.UInt16(1200.toUShort()),
-                Key.PROTO_VERSION to u8(1), Key.FILTER to u8(0), Key.SESSION_ID to t("s1")),
+                Key.PROTO_VERSION to u8(5), Key.STATE to u8(4), Key.SESSION_ID to t("s1")),
         )
-        assertEquals(WatchCommand.Hello(1200, 1, false, "s1"), cmd)
+        assertEquals(WatchCommand.Hello(1200, 5, 4, "s1"), cmd)
+        // An older watch sends no Quick launch, and an unknown one is ignored.
+        assertEquals(WatchCommand.Hello(320, 4, null, null), WatchCodec.decode(mapOf(Key.CMD to u8(1), Key.PROTO_VERSION to u8(4))))
+        assertEquals(null, (WatchCodec.decode(mapOf(Key.CMD to u8(1), Key.STATE to u8(9))) as WatchCommand.Hello).quickLaunch)
+    }
+
+    @Test
+    fun approvalsBothWays() {
+        val hello = WatchCodec.decode(mapOf(Key.CMD to u8(1), Key.FLAGS to u8(Protocol.HelloFlag.APPROVALS))) as WatchCommand.Hello
+        assertEquals(true, hello.approvals)
+        assertEquals(false, (WatchCodec.decode(mapOf(Key.CMD to u8(1))) as WatchCommand.Hello).approvals)
+        assertEquals(
+            WatchCommand.Approve("s1", "srq-1", "deny"),
+            WatchCodec.decode(mapOf(Key.CMD to u8(16), Key.SESSION_ID to t("s1"), Key.MESSAGE_ID to t("srq-1"), Key.STATE to u8(3))),
+        )
+        assertNull(WatchCodec.decode(mapOf(Key.CMD to u8(16), Key.MESSAGE_ID to t("srq-1"), Key.STATE to u8(9))))
+        val msg = WatchCodec.approval("s1", "srq-1", "Repo", "rm -rf build", listOf("once", "deny"), closed = false, textBudget = 1200)
+        assertEquals(Protocol.Type.APPROVAL, (msg[Key.TYPE] as PebbleDictionaryItem.UInt8).value.toInt())
+        assertEquals(0b1001, (msg[Key.FLAGS] as PebbleDictionaryItem.UInt8).value.toInt())
+        assertEquals(0, (msg[Key.STATE] as PebbleDictionaryItem.UInt8).value.toInt())
+    }
+
+    @Test
+    fun encodesStreamAndConfig() {
+        val stream = WatchCodec.stream("s1", "Hello there, this is long", 12)
+        assertEquals(Protocol.Type.STREAM, (stream[Key.TYPE] as PebbleDictionaryItem.UInt8).value.toInt())
+        assertEquals("s1", (stream[Key.SESSION_ID] as PebbleDictionaryItem.Text).value)
+        assertEquals(true, (stream[Key.TEXT] as PebbleDictionaryItem.Text).value.encodeToByteArray().size <= 12)
+        val config = WatchCodec.config(Protocol.QuickLaunch.RECENT_AUDIO)
+        assertEquals(Protocol.Type.CONFIG, (config[Key.TYPE] as PebbleDictionaryItem.UInt8).value.toInt())
+        assertEquals(Protocol.QuickLaunch.RECENT_AUDIO, (config[Key.STATE] as PebbleDictionaryItem.UInt8).value.toInt())
     }
 
     @Test
@@ -53,7 +83,7 @@ class WatchCodecTest {
 
     @Test
     fun decodesRecentAudioCommands() {
-        assertEquals(WatchCommand.ListAudio(false), WatchCodec.decode(mapOf(Key.CMD to u8(11), Key.FILTER to u8(0))))
+        assertEquals(WatchCommand.ListAudio, WatchCodec.decode(mapOf(Key.CMD to u8(11))))
         assertEquals(
             WatchCommand.OpenReply("s1", "7"),
             WatchCodec.decode(mapOf(Key.CMD to u8(12), Key.SESSION_ID to t("s1"), Key.MESSAGE_ID to t("7"))),

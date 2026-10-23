@@ -11,5 +11,3 @@ data class WatchSession(val id: String, val title: String, val flags: Int)
 data class WatchMessage(val id: String, val role: Int, val flags: Int, val text: String)
 
 enum class ToolActivity { HIDDEN, SILENT, NOTIFY }
-
-enum class NotifyScope { OPEN_SESSION, ALL_ELIGIBLE }

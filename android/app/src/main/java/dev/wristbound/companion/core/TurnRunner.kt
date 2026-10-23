@@ -9,6 +9,7 @@ import dev.wristbound.companion.hermes.params
 import dev.wristbound.companion.pebble.Protocol
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -25,6 +26,17 @@ sealed class TurnOutcome {
     data class Uncertain(val detail: String) : TurnOutcome()
     data object AuthFailed : TurnOutcome()
 }
+
+/**
+ * Hermes asking before a step (a dangerous shell command, say). [choices] are Hermes' answer
+ * names, `once`, `session`, `always` and `deny`, in the order to offer them.
+ */
+data class ApprovalRequest(
+    val id: String,
+    val command: String,
+    val description: String,
+    val choices: List<String>,
+)
 
 /**
  * Runs one user turn through the Hermes gateway socket, the way the desktop app does:
@@ -51,7 +63,11 @@ class TurnRunner(
         onProgress: suspend (Protocol.Submit, String) -> Unit,
         onTool: suspend (String) -> Unit = {},
         onCreated: suspend (String) -> Unit = {},
+        onDelta: suspend (String?) -> Unit = {},
+        onApproval: suspend (ApprovalRequest, answer: (String) -> Boolean) -> Unit = { _, _ -> },
+        onApprovalClosed: suspend (String) -> Unit = {},
     ): TurnOutcome {
+        val events = Listeners(onProgress, onTool, onDelta, onApproval, onApprovalClosed)
         onProgress(Protocol.Submit.QUEUED, "Sending to Hermes")
         val gateway = try {
             api.openGateway()
@@ -68,6 +84,7 @@ class TurnRunner(
         var boundary: Long? = null
         var userRow: Long? = null
         try {
+            advertise(gateway)
             val runtime = if (sessionId != null) {
                 val resumed = gateway.call(
                     "session.resume",
@@ -95,7 +112,7 @@ class TurnRunner(
             userRow = ack.string("user_row_id")?.toLongOrNull()
             val queued = ack.string("status") == "queued"
             onProgress(Protocol.Submit.WORKING, if (queued) "Queued behind a running turn" else "Hermes is working")
-            return listen(gateway, runtime, awaitStart = queued, onProgress, onTool)
+            return listen(gateway, runtime, awaitStart = queued, events)
                 ?: TurnOutcome.Uncertain("Still running; check later")
         } catch (e: GatewayRpcException) {
             // An error answer means Hermes did not start anything for that call.
@@ -108,7 +125,7 @@ class TurnRunner(
             gateway.close()
         }
         val target = stored ?: return TurnOutcome.Uncertain("Connection lost; not resent")
-        return recover(target, Asked(text, boundary, userRow), onProgress, onTool)
+        return recover(target, Asked(text, boundary, userRow), events)
     }
 
     /** The newest transcript row id in [sessionId], or null if it cannot be read. */
@@ -127,22 +144,29 @@ class TurnRunner(
         gateway: Gateway,
         runtime: String,
         awaitStart: Boolean,
-        onProgress: suspend (Protocol.Submit, String) -> Unit,
-        onTool: suspend (String) -> Unit,
+        events: Listeners,
     ): TurnOutcome? = withTimeoutOrNull(turnTimeoutMs) {
+        val (onProgress, onTool, onDelta) = events
         var started = !awaitStart
         try {
             for (event in gateway.events) {
                 if (event.sessionId != null && event.sessionId != runtime) continue
+                val requestId = event.requestId
+                if (requestId != null) {
+                    request(gateway, requestId, event.type, event.payload, events)
+                    continue
+                }
                 when (event.type) {
                     "message.start" -> {
                         if (!started) onProgress(Protocol.Submit.WORKING, "Hermes is working")
                         started = true
                     }
+                    // A null chunk ends one segment of the reply (before tool lines).
+                    "message.delta" -> if (started) onDelta(event.payload.string("text"))
                     "tool.start" -> if (started) onTool(event.payload.string("name") ?: "a tool")
                     "message.complete" -> if (started) return@withTimeoutOrNull completion(event)
                     "error" -> return@withTimeoutOrNull TurnOutcome.Failed(event.payload.string("message")?.take(60) ?: "Hermes error")
-                    in WAITS_FOR_ANSWER -> onProgress(Protocol.Submit.WORKING, "Needs an answer on desktop")
+                    "request.cancel" -> event.payload.string("id")?.let { events.onApprovalClosed(it) }
                 }
             }
         } catch (e: IOException) {
@@ -152,6 +176,36 @@ class TurnRunner(
             throw IOException(e.message, e)
         }
         throw IOException("Gateway closed")
+    }
+
+    /** Say this connection answers Hermes' questions, so an approval reaches it at all. */
+    private suspend fun advertise(gateway: Gateway) {
+        try {
+            gateway.call("client.capabilities", params("server_requests" to true), CAPABILITIES_TIMEOUT_MS)
+        } catch (e: GatewayRpcException) {
+            // An older Hermes: it never sends requests, so there is nothing to answer.
+        }
+    }
+
+    /**
+     * One question from Hermes. An approval goes to the user; anything else (a clarification,
+     * a password) is declined so the desktop can answer it, and the watch says so.
+     */
+    private suspend fun request(gateway: Gateway, id: String, method: String, params: JsonObject, events: Listeners) {
+        if (method == "approval") {
+            val offered = (params["choices"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+            val approval = ApprovalRequest(
+                id,
+                command = params.string("command").orEmpty(),
+                description = params.string("description").orEmpty(),
+                choices = APPROVAL_CHOICES.filter { it in offered || it == "deny" },
+            )
+            events.onProgress(Protocol.Submit.WORKING, "Waiting for your OK")
+            events.onApproval(approval) { choice -> gateway.answer(id, params("choice" to choice)) }
+        } else {
+            gateway.decline(id, Gateway.NOT_SHOWN, "Wristbound cannot answer this; answer it on the desktop")
+            events.onProgress(Protocol.Submit.WORKING, "Needs an answer on desktop")
+        }
     }
 
     private fun completion(event: GatewayEvent): TurnOutcome {
@@ -171,10 +225,9 @@ class TurnRunner(
     private suspend fun recover(
         sessionId: String,
         asked: Asked,
-        onProgress: suspend (Protocol.Submit, String) -> Unit,
-        onTool: suspend (String) -> Unit,
+        events: Listeners,
     ): TurnOutcome {
-        onProgress(Protocol.Submit.WORKING, "Reconnecting to Hermes")
+        events.onProgress(Protocol.Submit.WORKING, "Reconnecting to Hermes")
         var waited = 0L
         while (waited <= recoverTimeoutMs) {
             when (val seen = answerInTranscript(sessionId, asked)) {
@@ -183,6 +236,7 @@ class TurnRunner(
             }
             try {
                 api.openGateway().use { gateway ->
+                    advertise(gateway)
                     val resumed = gateway.call(
                         "session.resume",
                         params("session_id" to sessionId, "omit_messages" to true, "inline_images" to false),
@@ -191,7 +245,13 @@ class TurnRunner(
                     val runtime = resumed.string("session_id")
                     val running = (resumed["running"] as? JsonPrimitive)?.booleanOrNull == true
                     if (runtime != null && running) {
-                        return listen(gateway, runtime, awaitStart = false, onProgress, onTool)
+                        // A question asked while the socket was down is still waiting.
+                        (resumed["open_requests"] as? JsonArray)?.forEach { open ->
+                            val r = open as? JsonObject ?: return@forEach
+                            val id = r.string("id") ?: return@forEach
+                            request(gateway, id, r.string("method").orEmpty(), r["params"] as? JsonObject ?: JsonObject(emptyMap()), events)
+                        }
+                        return listen(gateway, runtime, awaitStart = false, events)
                             ?: TurnOutcome.Uncertain("Still running; check later")
                     }
                     // Idle: the turn already ended. The transcript is the authority.
@@ -213,6 +273,14 @@ class TurnRunner(
         }
         return TurnOutcome.Uncertain("Lost Hermes mid-turn; not resent")
     }
+
+    private data class Listeners(
+        val onProgress: suspend (Protocol.Submit, String) -> Unit,
+        val onTool: suspend (String) -> Unit,
+        val onDelta: suspend (String?) -> Unit,
+        val onApproval: suspend (ApprovalRequest, (String) -> Boolean) -> Unit,
+        val onApprovalClosed: suspend (String) -> Unit,
+    )
 
     /** What was sent, and where in the transcript its row can be. */
     private data class Asked(val text: String, val boundary: Long?, val userRow: Long?)
@@ -264,7 +332,9 @@ class TurnRunner(
         /** Existing rich-chat source label, as Hermes-Relay uses; Hermes has no Wristbound-specific one. */
         const val NEW_SESSION_SOURCE = "webui"
         const val TRANSCRIPT_WINDOW = 40
-        val WAITS_FOR_ANSWER = setOf("approval.request", "clarify.request", "sudo.request", "secret.request")
+        const val CAPABILITIES_TIMEOUT_MS = 15_000L
+        /** Hermes' approval answers, in the order the watch offers them. */
+        val APPROVAL_CHOICES = listOf("once", "session", "always", "deny")
 
         fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
     }

@@ -67,6 +67,12 @@ class Wristbound private constructor(context: Context) {
     @Volatile var watchOpen = false
         private set
     @Volatile private var textBudget = Protocol.DEFAULT_TEXT_BUDGET
+    /** The open watchapp answers approvals itself (HELLO); otherwise they go to a notification. */
+    @Volatile private var watchApproves = false
+
+    /** An approval Hermes is waiting on, in a turn this phone runs. */
+    private class OpenApproval(val sessionId: String, val title: String, val request: ApprovalRequest, val answer: (String) -> Boolean)
+    private val approvals = ConcurrentHashMap<String, OpenApproval>()
     @Volatile private var pendingReply: Pair<String, String>? = null
     @Volatile private var lastSend: Triple<String, String, Long>? = null
 
@@ -173,10 +179,14 @@ class Wristbound private constructor(context: Context) {
         when (cmd) {
             is WatchCommand.Hello -> {
                 textBudget = cmd.textBudget.coerceIn(64, 4000)
-                settings.includeTelegram = cmd.includeTelegram
+                watchApproves = cmd.approvals
                 if (cmd.protoVersion != Protocol.VERSION) {
                     watch.send(WatchCodec.status(Protocol.Conn.ERROR, "Update watch or phone app"))
                 }
+                // Watch options live here now; the watch's earlier choice stands until one is made.
+                val quick = settings.quickLaunch
+                if (quick == null) cmd.quickLaunch?.let { settings.quickLaunch = it }
+                else watch.send(WatchCodec.config(quick))
                 watch.send(WatchCodec.audioRoute(playback.hasPrivateOutput()))
                 pushSessions()
                 // The saved list only: the watch asks for a refresh when Recent audio is opened.
@@ -185,11 +195,10 @@ class Wristbound private constructor(context: Context) {
                     pendingReply = null
                     sendReplyToWatch(sid, mid)
                 }
+                // A question still waiting: the watch takes it over from the notification.
+                approvals.values.forEach { showApproval(it) }
             }
-            is WatchCommand.ListSessions -> {
-                settings.includeTelegram = cmd.includeTelegram
-                pushSessions()
-            }
+            WatchCommand.ListSessions -> pushSessions()
             is WatchCommand.OpenSession -> openSession(cmd.sessionId)
             is WatchCommand.Send -> submit(cmd.sessionId, cmd.text)
             is WatchCommand.NewSession -> newSession(cmd.text)
@@ -198,13 +207,11 @@ class Wristbound private constructor(context: Context) {
             WatchCommand.Pause -> playback.pause()
             is WatchCommand.Resume -> playback.resume(cmd.speaker)
             WatchCommand.Stop -> playback.stop()
-            is WatchCommand.ListAudio -> {
-                settings.includeTelegram = cmd.includeTelegram
-                pushAudio(refresh = true)
-            }
+            WatchCommand.ListAudio -> pushAudio(refresh = true)
             is WatchCommand.PlayOnWatch -> playOnWatch(cmd.sessionId, cmd.messageId, cmd.chunkBytes)
             is WatchCommand.AudioPull -> watchStream.pull(cmd.messageId, cmd.offset, cmd.length)
             is WatchCommand.AudioStop -> watchStream.stop(cmd.messageId)
+            is WatchCommand.Approve -> answerApproval(cmd.requestId, cmd.choice)
             is WatchCommand.OpenReply -> {
                 state.markHeard(cmd.messageId)
                 sendReplyToWatch(cmd.sessionId, cmd.messageId, requested = true)
@@ -214,9 +221,14 @@ class Wristbound private constructor(context: Context) {
 
     // -- sessions & history ---------------------------------------------------------------------
 
-    private suspend fun fetchSessions(api: HermesApi): List<HermesSession> {
+    /**
+     * Recent sessions. The watch's list leaves automation sessions out at the source with
+     * [forList], so they cannot crowd out chats; polling and Recent audio look at all of them.
+     */
+    private suspend fun fetchSessions(api: HermesApi, forList: Boolean = false): List<HermesSession> {
+        val exclude = if (forList && !settings.showAutomation) HermesSession.AUTOMATION_SOURCES else emptyList()
         val sessions = try {
-            api.listSessions(100).also { recordBackend(null) }
+            api.listSessions(100, exclude).also { recordBackend(null) }
         } catch (e: IOException) {
             recordBackend(e)
             throw e
@@ -235,8 +247,8 @@ class Wristbound private constructor(context: Context) {
         }
         try {
             val visible = SessionMapper.visibleSessions(
-                fetchSessions(api), settings.includeTelegram, state.lastSeen(), state.readOnly(), activeTurns.keys,
-                settings.allowTelegramReplies,
+                fetchSessions(api, forList = true), settings.showMessaging, state.lastSeen(), state.readOnly(), activeTurns.keys,
+                settings.allowTelegramReplies, settings.showAutomation,
             )
             state.saveSessions(visible)
             watch.send(WatchCodec.status(Protocol.Conn.OK, ""))
@@ -347,7 +359,7 @@ class Wristbound private constructor(context: Context) {
     }
 
     private suspend fun sendAudioPages(items: List<AudioItem>) {
-        val visible = AudioInbox.visible(items, settings.includeTelegram, Protocol.MAX_AUDIO)
+        val visible = AudioInbox.visible(items, settings.showMessaging, Protocol.MAX_AUDIO)
         val seen = state.lastSeen()
         val pages = if (visible.isEmpty()) listOf(WatchCodec.audioPage(0, 0, null, false))
         else visible.mapIndexed { i, item ->
@@ -403,6 +415,16 @@ class Wristbound private constructor(context: Context) {
             var sessionId = existing
             val title = existing?.let { sessionsById[it]?.displayTitle } ?: Text.forWatch(text.lineSequence().first().take(40))
             val tool = settings.toolActivity
+            // The open conversation shows the reply as Hermes writes it.
+            var lastStreamed = ""
+            val stream = ReplyStream(scope) { soFar ->
+                val sid = sessionId ?: return@ReplyStream
+                val text = Text.fit(Text.forWatch(soFar), textBudget).first
+                if (watchOpen && text != lastStreamed) {
+                    lastStreamed = text
+                    watch.send(WatchCodec.stream(sid, text, textBudget))
+                }
+            }
             val outcome = TurnRunner(api).run(
                 existing, text,
                 onProgress = { s, d -> submitState(sessionId, s, d) },
@@ -417,7 +439,20 @@ class Wristbound private constructor(context: Context) {
                     currentCoroutineContext()[Job]?.let { activeTurns[id] = it }
                     watch.send(WatchCodec.sessionOpened(WatchSession(id, title, 0)))
                 },
+                onDelta = { stream.delta(it) },
+                onApproval = { request, answer ->
+                    val sid = sessionId
+                    if (sid == null) {
+                        answer("deny") // cannot happen: Hermes asks inside a session
+                    } else {
+                        OpenApproval(sid, title, request, answer).also { approvals[request.id] = it; showApproval(it) }
+                    }
+                },
+                onApprovalClosed = { closeApproval(it) },
             )
+            stream.finish()
+            // The turn is over: any question it asked is settled.
+            approvals.values.filter { it.sessionId == sessionId }.forEach { closeApproval(it.request.id) }
             notifier.clearToolActivity()
             val sid = sessionId
             when (outcome) {
@@ -451,6 +486,43 @@ class Wristbound private constructor(context: Context) {
         if (watchOpen) watch.send(WatchCodec.submit(sessionId, s, detail))
     }
 
+    // -- approvals ------------------------------------------------------------------------------
+
+    /**
+     * Put an approval in front of the user: on the open watchapp when it can answer, otherwise as
+     * a notification with the answers as actions, which the Pebble mirrors. Always alerts.
+     */
+    private suspend fun showApproval(open: OpenApproval) {
+        val r = open.request
+        val text = listOf(r.description, r.command).filter { it.isNotBlank() }.distinct().joinToString("\n")
+            .ifBlank { "Hermes wants to go ahead" }
+        if (watchOpen && watchApproves &&
+            watch.send(WatchCodec.approval(open.sessionId, r.id, open.title, Text.forWatch(text), r.choices, closed = false, textBudget))
+        ) {
+            notifier.clearApproval(r.id)
+            return
+        }
+        notifier.approval(open.sessionId, r.id, open.title, Text.forWatch(text), r.choices)
+    }
+
+    /** The user's answer, from the watch or a notification action. False if Hermes no longer waits. */
+    suspend fun answerApproval(requestId: String, choice: String): Boolean {
+        val open = approvals.remove(requestId) ?: return false
+        notifier.clearApproval(requestId)
+        val sent = open.answer(choice)
+        submitState(open.sessionId, Protocol.Submit.WORKING, if (!sent) "Could not answer; check the desktop" else if (choice == "deny") "Denied" else "Approved")
+        return sent
+    }
+
+    /** Hermes stopped waiting (answered elsewhere, timed out, or the turn ended). */
+    private suspend fun closeApproval(requestId: String) {
+        val open = approvals.remove(requestId) ?: return
+        notifier.clearApproval(requestId)
+        if (watchOpen && watchApproves) {
+            watch.send(WatchCodec.approval(open.sessionId, requestId, open.title, "", emptyList(), closed = true, textBudget))
+        }
+    }
+
     /** The reply to a turn sent from the watch, through the same alert policy as polling. */
     private suspend fun deliverLatestReply(api: HermesApi, sessionId: String, title: String) {
         val raw = runCatching { api.recentMessages(sessionId, 20) }.getOrNull() ?: return
@@ -461,11 +533,12 @@ class Wristbound private constructor(context: Context) {
     }
 
     private fun alertPolicy() = AlertPolicy(
-        replies = settings.notifyReplies,
-        scope = settings.notifyScope,
-        telegramText = settings.notifyTelegram,
-        telegramAudio = settings.notifyTelegramAudio,
-        openSessionId = state.openSessionId,
+        enabled = settings.notifyReplies,
+        audio = settings.alertAudio,
+        watchTurns = settings.alertWatchTurns,
+        chats = settings.alertChats,
+        messagingText = settings.alertMessagingText,
+        background = settings.alertBackground,
     )
 
     /**
@@ -518,6 +591,16 @@ class Wristbound private constructor(context: Context) {
     }
 
     suspend fun openWatchApp(): Boolean = watch.startApp()
+
+    /** A watch option changed in the companion app: tell an open watchapp now. */
+    fun onWatchSettingsChanged() {
+        if (!watchOpen) return
+        scope.launch {
+            settings.quickLaunch?.let { watch.send(WatchCodec.config(it)) }
+            pushSessions()
+            sendAudioPages(state.loadAudio())
+        }
+    }
 
     // -- reply monitoring -----------------------------------------------------------------------
 

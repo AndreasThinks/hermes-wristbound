@@ -1,9 +1,10 @@
 #include "comm.h"
+#include "approval.h"
 #include "model.h"
 #include "speaker.h"
 
 #if defined(PBL_PLATFORM_APLITE)
-#define QUEUE_LEN 3
+#define QUEUE_LEN 2
 // Aplite has no microphone: only quick replies leave it.
 #define OUTGOING_TEXT_LEN 64
 #else
@@ -85,14 +86,15 @@ static void prv_pump(void) {
     case CMD_HELLO:
       dict_write_uint16(iter, MESSAGE_KEY_TextBudget, TEXT_BUDGET);
       dict_write_uint8(iter, MESSAGE_KEY_ProtoVersion, PROTO_VERSION);
-      dict_write_uint8(iter, MESSAGE_KEY_Filter, g_model.include_telegram);
+      // What the watch opens on, so a phone that has no choice saved yet keeps the watch's.
+      dict_write_uint8(iter, MESSAGE_KEY_State, g_model.quick_launch);
+      // Flags: what this watchapp can do beyond the basics.
+#if defined(APPROVAL_ENABLED)
+      dict_write_uint8(iter, MESSAGE_KEY_Flags, HELLO_FLAG_APPROVALS);
+#endif
       if (p->session_id[0]) {
         dict_write_cstring(iter, MESSAGE_KEY_SessionId, p->session_id);
       }
-      break;
-    case CMD_LIST_SESSIONS:
-    case CMD_LIST_AUDIO:
-      dict_write_uint8(iter, MESSAGE_KEY_Filter, g_model.include_telegram);
       break;
     case CMD_OPEN_SESSION:
       dict_write_cstring(iter, MESSAGE_KEY_SessionId, p->session_id);
@@ -128,6 +130,13 @@ static void prv_pump(void) {
     case CMD_AUDIO_STOP:
       dict_write_cstring(iter, MESSAGE_KEY_MessageId, p->message_id);
       break;
+#if defined(APPROVAL_ENABLED)
+    case CMD_APPROVE:
+      dict_write_cstring(iter, MESSAGE_KEY_SessionId, p->session_id);
+      dict_write_cstring(iter, MESSAGE_KEY_MessageId, p->message_id);
+      dict_write_uint8(iter, MESSAGE_KEY_State, p->route);
+      break;
+#endif
     default:
       break;
   }
@@ -250,15 +259,22 @@ static void prv_handle_message(DictionaryIterator *iter) {
   }
   int index = prv_int(iter, MESSAGE_KEY_Index, 0);
   int total = prv_int(iter, MESSAGE_KEY_Total, 0);
-  if (index == 0) {
-    model_clear_messages();
-  }
-  if (total > 0 && index < total) {
-    model_set_message(index, prv_str(iter, MESSAGE_KEY_MessageId),
+  // Pages come oldest first; a watch that keeps fewer keeps the newest. A refresh overwrites
+  // the rows in place, so the conversation on screen does not empty and refill.
+  int skip = total > MAX_MESSAGES ? total - MAX_MESSAGES : 0;
+  if (total > 0 && index < total && index >= skip) {
+    model_set_message(index - skip, prv_str(iter, MESSAGE_KEY_MessageId),
                       prv_int(iter, MESSAGE_KEY_Role, ROLE_ASSISTANT),
                       prv_int(iter, MESSAGE_KEY_Flags, 0), prv_str(iter, MESSAGE_KEY_Text));
   }
+  if (total == 0 || index + 1 >= total) {
+    model_truncate_messages(total - skip);
+  }
   g_model.messages_loading = total > 0 && index + 1 < total;
+  // The history has caught up once the turn is over: what was sent and streamed is in it now.
+  if (!g_model.messages_loading && g_model.submit != SUBMIT_QUEUED && g_model.submit != SUBMIT_WORKING) {
+    model_clear_pending();
+  }
   if (s_handlers.messages_changed) {
     s_handlers.messages_changed();
   }
@@ -291,6 +307,20 @@ static void prv_inbox_received(DictionaryIterator *iter, void *ctx) {
     case TYPE_AUDIO_ROUTE:
       g_model.headphones = prv_int(iter, MESSAGE_KEY_State, 0) != 0;
       break;
+    case TYPE_STREAM:
+      // Only while a turn runs here: a late chunk after the history caught up is stale.
+      if (strcmp(prv_str(iter, MESSAGE_KEY_SessionId), g_model.open_session_id) == 0 &&
+          (g_model.submit == SUBMIT_QUEUED || g_model.submit == SUBMIT_WORKING)) {
+        model_set_stream(prv_str(iter, MESSAGE_KEY_Text));
+        if (s_handlers.stream_changed) {
+          s_handlers.stream_changed();
+        }
+      }
+      break;
+    case TYPE_CONFIG:
+      g_model.quick_launch = prv_int(iter, MESSAGE_KEY_State, QUICK_HOME) % QUICK_COUNT;
+      model_save_prefs();
+      break;
     case TYPE_STATUS:
       prv_set_conn(prv_int(iter, MESSAGE_KEY_State, CONN_ERROR), prv_str(iter, MESSAGE_KEY_Detail));
       break;
@@ -303,6 +333,15 @@ static void prv_inbox_received(DictionaryIterator *iter, void *ctx) {
                                   prv_int(iter, MESSAGE_KEY_Flags, 0));
       }
       break;
+#if defined(APPROVAL_ENABLED)
+    case TYPE_APPROVAL:
+      if (s_handlers.approval) {
+        s_handlers.approval(prv_str(iter, MESSAGE_KEY_SessionId), prv_str(iter, MESSAGE_KEY_MessageId),
+                            prv_str(iter, MESSAGE_KEY_Title), prv_str(iter, MESSAGE_KEY_Text),
+                            prv_int(iter, MESSAGE_KEY_Flags, 0), prv_int(iter, MESSAGE_KEY_State, 0) != 0);
+      }
+      break;
+#endif
     case TYPE_PLAYBACK:
       prv_copy(g_model.playback_message_id, prv_str(iter, MESSAGE_KEY_MessageId), MESSAGE_ID_LEN);
       g_model.playback = prv_int(iter, MESSAGE_KEY_State, PLAYBACK_IDLE);
@@ -483,3 +522,13 @@ void comm_audio_stop(const char *message_id) {
 uint32_t comm_inbox_size(void) {
   return s_inbox_size;
 }
+
+#if defined(APPROVAL_ENABLED)
+void comm_approve(const char *session_id, const char *request_id, ApprovalChoice choice) {
+  Pending p = prv_pending(CMD_APPROVE);
+  prv_copy(p.session_id, session_id, SESSION_ID_LEN);
+  prv_copy(p.message_id, request_id, MESSAGE_ID_LEN);
+  p.route = choice; // the choice rides in the route byte
+  prv_enqueue(&p);
+}
+#endif

@@ -25,6 +25,12 @@ GFont theme_font_label(void);
 void theme_window(Window *window);
 void theme_menu(MenuLayer *menu);
 void theme_draw_header(GContext *ctx, const Layer *cell, const char *text, GColor color);
+// A fixed label in pixel caps (Gothic when it is not ASCII), drawn at `rect`.
+void theme_draw_label(GContext *ctx, GRect rect, const char *text, GColor color,
+                      GTextAlignment align);
+// One mark (wave, else the new block) with its left edge and vertical centre at `left_mid`.
+// Returns the width it took, gap included; 0 for none. Aplite draws a plain block.
+int theme_draw_mark(GContext *ctx, GPoint left_mid, uint8_t marks, GColor color);
 void theme_draw_row(GContext *ctx, const Layer *cell, const char *title, const char *subtitle,
                     uint8_t marks);
 
