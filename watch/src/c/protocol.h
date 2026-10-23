@@ -7,7 +7,7 @@
 
 // Watch -> phone commands (MESSAGE_KEY_Cmd)
 typedef enum {
-  CMD_HELLO = 1,         // TextBudget, ProtoVersion, SessionId (last selected, optional)
+  CMD_HELLO = 1,         // TextBudget, ProtoVersion, State (Quick launch), SessionId (last selected, optional)
   CMD_LIST_SESSIONS = 2,
   CMD_OPEN_SESSION = 3,  // SessionId
   CMD_SEND = 4,          // SessionId, Text

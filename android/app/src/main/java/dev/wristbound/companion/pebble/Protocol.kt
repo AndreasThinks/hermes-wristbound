@@ -10,7 +10,7 @@ import java.util.UUID
  */
 object Protocol {
     val WATCHAPP_UUID: UUID = UUID.fromString("094c587f-8bd7-4377-aa6b-ff55eb724b27")
-    const val VERSION = 4
+    const val VERSION = 5
 
     object Key {
         const val CMD = 10000u
@@ -27,6 +27,7 @@ object Protocol {
         const val TEXT = 10011u
         const val STATE = 10012u
         const val DETAIL = 10013u
+        /** Unused since v5 (the phone owns the Telegram filter); the key keeps its slot. */
         const val FILTER = 10014u
         const val ROUTE = 10015u
         const val TIME = 10016u
@@ -65,6 +66,20 @@ object Protocol {
         const val AUDIO_START = 9
         const val AUDIO_DATA = 10
         const val AUDIO_ROUTE = 11
+        /** The reply so far while Hermes writes it, for the open conversation. */
+        const val STREAM = 12
+        /** Watch settings kept in the companion app: STATE = Quick launch. */
+        const val CONFIG = 13
+    }
+
+    /** What the watchapp opens on (watch/src/c/model.h QuickLaunch). */
+    object QuickLaunch {
+        const val HOME = 0
+        const val DICTATE = 1
+        const val RECENT_AUDIO = 2
+        const val PLAY_LATEST = 3
+        const val LAST_SESSION = 4
+        const val COUNT = 5
     }
 
     enum class Conn(val code: Int) { OK(0), OFFLINE(1), STALE(2), NOT_CONFIGURED(3), AUTH_ERROR(4), ERROR(5) }

@@ -58,6 +58,7 @@ import dev.wristbound.companion.hermes.HermesProtocolException
 import dev.wristbound.companion.hermes.LoopbackReceiver
 import dev.wristbound.companion.hermes.SignInException
 import dev.wristbound.companion.notify.Notifier
+import dev.wristbound.companion.pebble.Protocol
 import dev.wristbound.companion.sync.SyncService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -113,8 +114,21 @@ class MainActivity : AppCompatActivity() {
         column.addView(heading("Watch"))
         watchStatus = note("")
         column.addView(watchStatus)
-        column.addView(switch("Show Telegram sessions", s.includeTelegram) { s.includeTelegram = it })
-        column.addView(switch("Allow replies to Telegram sessions", s.allowTelegramReplies) { s.allowTelegramReplies = it })
+        column.addView(spinner("Watchapp opens on", QUICK_LAUNCH_CHOICES, s.quickLaunch ?: Protocol.QuickLaunch.HOME) {
+            // The first callback only reports the initial selection: keep the watch's own choice until one is made here.
+            if (s.quickLaunch != null || it != Protocol.QuickLaunch.HOME) {
+                s.quickLaunch = it
+                controller.onWatchSettingsChanged()
+            }
+        })
+        column.addView(switch("Show Telegram sessions", s.includeTelegram) {
+            s.includeTelegram = it
+            controller.onWatchSettingsChanged()
+        })
+        column.addView(switch("Allow replies to Telegram sessions", s.allowTelegramReplies) {
+            s.allowTelegramReplies = it
+            controller.onWatchSettingsChanged()
+        })
         column.addView(note("Off keeps Telegram sessions read-only on the watch: you can still read and play replies, and answer in Telegram."))
         column.addView(switch("Show tool activity on watch", s.toolActivity != ToolActivity.HIDDEN) {
             s.toolActivity = if (it) ToolActivity.SILENT else ToolActivity.HIDDEN
@@ -572,5 +586,7 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val TAG = "WristboundSetup"
+        /** In [Protocol.QuickLaunch] order. */
+        val QUICK_LAUNCH_CHOICES = listOf("Home", "Dictate a new session", "Recent audio", "Play latest audio", "Last session")
     }
 }

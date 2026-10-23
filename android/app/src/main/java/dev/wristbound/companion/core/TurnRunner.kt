@@ -51,7 +51,9 @@ class TurnRunner(
         onProgress: suspend (Protocol.Submit, String) -> Unit,
         onTool: suspend (String) -> Unit = {},
         onCreated: suspend (String) -> Unit = {},
+        onDelta: suspend (String?) -> Unit = {},
     ): TurnOutcome {
+        val events = Listeners(onProgress, onTool, onDelta)
         onProgress(Protocol.Submit.QUEUED, "Sending to Hermes")
         val gateway = try {
             api.openGateway()
@@ -95,7 +97,7 @@ class TurnRunner(
             userRow = ack.string("user_row_id")?.toLongOrNull()
             val queued = ack.string("status") == "queued"
             onProgress(Protocol.Submit.WORKING, if (queued) "Queued behind a running turn" else "Hermes is working")
-            return listen(gateway, runtime, awaitStart = queued, onProgress, onTool)
+            return listen(gateway, runtime, awaitStart = queued, events)
                 ?: TurnOutcome.Uncertain("Still running; check later")
         } catch (e: GatewayRpcException) {
             // An error answer means Hermes did not start anything for that call.
@@ -108,7 +110,7 @@ class TurnRunner(
             gateway.close()
         }
         val target = stored ?: return TurnOutcome.Uncertain("Connection lost; not resent")
-        return recover(target, Asked(text, boundary, userRow), onProgress, onTool)
+        return recover(target, Asked(text, boundary, userRow), events)
     }
 
     /** The newest transcript row id in [sessionId], or null if it cannot be read. */
@@ -127,9 +129,9 @@ class TurnRunner(
         gateway: Gateway,
         runtime: String,
         awaitStart: Boolean,
-        onProgress: suspend (Protocol.Submit, String) -> Unit,
-        onTool: suspend (String) -> Unit,
+        events: Listeners,
     ): TurnOutcome? = withTimeoutOrNull(turnTimeoutMs) {
+        val (onProgress, onTool, onDelta) = events
         var started = !awaitStart
         try {
             for (event in gateway.events) {
@@ -139,6 +141,8 @@ class TurnRunner(
                         if (!started) onProgress(Protocol.Submit.WORKING, "Hermes is working")
                         started = true
                     }
+                    // A null chunk ends one segment of the reply (before tool lines).
+                    "message.delta" -> if (started) onDelta(event.payload.string("text"))
                     "tool.start" -> if (started) onTool(event.payload.string("name") ?: "a tool")
                     "message.complete" -> if (started) return@withTimeoutOrNull completion(event)
                     "error" -> return@withTimeoutOrNull TurnOutcome.Failed(event.payload.string("message")?.take(60) ?: "Hermes error")
@@ -171,10 +175,9 @@ class TurnRunner(
     private suspend fun recover(
         sessionId: String,
         asked: Asked,
-        onProgress: suspend (Protocol.Submit, String) -> Unit,
-        onTool: suspend (String) -> Unit,
+        events: Listeners,
     ): TurnOutcome {
-        onProgress(Protocol.Submit.WORKING, "Reconnecting to Hermes")
+        events.onProgress(Protocol.Submit.WORKING, "Reconnecting to Hermes")
         var waited = 0L
         while (waited <= recoverTimeoutMs) {
             when (val seen = answerInTranscript(sessionId, asked)) {
@@ -191,7 +194,7 @@ class TurnRunner(
                     val runtime = resumed.string("session_id")
                     val running = (resumed["running"] as? JsonPrimitive)?.booleanOrNull == true
                     if (runtime != null && running) {
-                        return listen(gateway, runtime, awaitStart = false, onProgress, onTool)
+                        return listen(gateway, runtime, awaitStart = false, events)
                             ?: TurnOutcome.Uncertain("Still running; check later")
                     }
                     // Idle: the turn already ended. The transcript is the authority.
@@ -213,6 +216,12 @@ class TurnRunner(
         }
         return TurnOutcome.Uncertain("Lost Hermes mid-turn; not resent")
     }
+
+    private data class Listeners(
+        val onProgress: suspend (Protocol.Submit, String) -> Unit,
+        val onTool: suspend (String) -> Unit,
+        val onDelta: suspend (String?) -> Unit,
+    )
 
     /** What was sent, and where in the transcript its row can be. */
     private data class Asked(val text: String, val boundary: Long?, val userRow: Long?)

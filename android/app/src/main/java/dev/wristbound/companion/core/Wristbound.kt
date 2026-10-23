@@ -173,10 +173,13 @@ class Wristbound private constructor(context: Context) {
         when (cmd) {
             is WatchCommand.Hello -> {
                 textBudget = cmd.textBudget.coerceIn(64, 4000)
-                settings.includeTelegram = cmd.includeTelegram
                 if (cmd.protoVersion != Protocol.VERSION) {
                     watch.send(WatchCodec.status(Protocol.Conn.ERROR, "Update watch or phone app"))
                 }
+                // Watch options live here now; the watch's earlier choice stands until one is made.
+                val quick = settings.quickLaunch
+                if (quick == null) cmd.quickLaunch?.let { settings.quickLaunch = it }
+                else watch.send(WatchCodec.config(quick))
                 watch.send(WatchCodec.audioRoute(playback.hasPrivateOutput()))
                 pushSessions()
                 // The saved list only: the watch asks for a refresh when Recent audio is opened.
@@ -186,10 +189,7 @@ class Wristbound private constructor(context: Context) {
                     sendReplyToWatch(sid, mid)
                 }
             }
-            is WatchCommand.ListSessions -> {
-                settings.includeTelegram = cmd.includeTelegram
-                pushSessions()
-            }
+            WatchCommand.ListSessions -> pushSessions()
             is WatchCommand.OpenSession -> openSession(cmd.sessionId)
             is WatchCommand.Send -> submit(cmd.sessionId, cmd.text)
             is WatchCommand.NewSession -> newSession(cmd.text)
@@ -198,10 +198,7 @@ class Wristbound private constructor(context: Context) {
             WatchCommand.Pause -> playback.pause()
             is WatchCommand.Resume -> playback.resume(cmd.speaker)
             WatchCommand.Stop -> playback.stop()
-            is WatchCommand.ListAudio -> {
-                settings.includeTelegram = cmd.includeTelegram
-                pushAudio(refresh = true)
-            }
+            WatchCommand.ListAudio -> pushAudio(refresh = true)
             is WatchCommand.PlayOnWatch -> playOnWatch(cmd.sessionId, cmd.messageId, cmd.chunkBytes)
             is WatchCommand.AudioPull -> watchStream.pull(cmd.messageId, cmd.offset, cmd.length)
             is WatchCommand.AudioStop -> watchStream.stop(cmd.messageId)
@@ -403,6 +400,16 @@ class Wristbound private constructor(context: Context) {
             var sessionId = existing
             val title = existing?.let { sessionsById[it]?.displayTitle } ?: Text.forWatch(text.lineSequence().first().take(40))
             val tool = settings.toolActivity
+            // The open conversation shows the reply as Hermes writes it.
+            var lastStreamed = ""
+            val stream = ReplyStream(scope) { soFar ->
+                val sid = sessionId ?: return@ReplyStream
+                val text = Text.fit(Text.forWatch(soFar), textBudget).first
+                if (watchOpen && text != lastStreamed) {
+                    lastStreamed = text
+                    watch.send(WatchCodec.stream(sid, text, textBudget))
+                }
+            }
             val outcome = TurnRunner(api).run(
                 existing, text,
                 onProgress = { s, d -> submitState(sessionId, s, d) },
@@ -417,7 +424,9 @@ class Wristbound private constructor(context: Context) {
                     currentCoroutineContext()[Job]?.let { activeTurns[id] = it }
                     watch.send(WatchCodec.sessionOpened(WatchSession(id, title, 0)))
                 },
+                onDelta = { stream.delta(it) },
             )
+            stream.finish()
             notifier.clearToolActivity()
             val sid = sessionId
             when (outcome) {
@@ -518,6 +527,16 @@ class Wristbound private constructor(context: Context) {
     }
 
     suspend fun openWatchApp(): Boolean = watch.startApp()
+
+    /** A watch option changed in the companion app: tell an open watchapp now. */
+    fun onWatchSettingsChanged() {
+        if (!watchOpen) return
+        scope.launch {
+            settings.quickLaunch?.let { watch.send(WatchCodec.config(it)) }
+            pushSessions()
+            sendAudioPages(state.loadAudio())
+        }
+    }
 
     // -- reply monitoring -----------------------------------------------------------------------
 

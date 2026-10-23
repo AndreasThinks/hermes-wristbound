@@ -11,6 +11,8 @@ import dev.wristbound.companion.hermes.HermesMessage
 import dev.wristbound.companion.hermes.HermesSession
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -68,6 +70,7 @@ class TurnRunnerTest {
         for ((k, v) in pairs) when (v) {
             is String -> put(k, v)
             is Boolean -> put(k, v)
+            is JsonElement -> put(k, v)
             else -> put(k, v.toString())
         }
     }
@@ -96,12 +99,16 @@ class TurnRunnerTest {
             emit("message.start")
             emit("tool.start", obj("tool_id" to "t1", "name" to "terminal"))
             emit("message.delta", obj("text" to "All"))
+            emit("message.delta", obj("text" to JsonNull))
+            emit("message.delta", obj("text" to " good"))
             emit("message.complete", obj("text" to "All good", "status" to "complete"))
         }
         val api = FakeApi(mutableListOf(gateway))
-        val outcome = TurnRunner(api).run("tg_123", "hi", onProgress = { _, _ -> }, onTool = { tools += it })
+        val deltas = mutableListOf<String?>()
+        val outcome = TurnRunner(api).run("tg_123", "hi", onProgress = { _, _ -> }, onTool = { tools += it }, onDelta = { deltas += it })
         assertEquals(TurnOutcome.Completed("All good"), outcome)
         assertEquals(listOf("terminal"), tools)
+        assertEquals(listOf("All", null, " good"), deltas)
         val (resume, submit) = gateway.calls
         assertEquals("session.resume", resume.first)
         assertEquals("tg_123", resume.second["session_id"]!!.jsonPrimitive.content)

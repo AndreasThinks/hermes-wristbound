@@ -8,20 +8,22 @@ A Pebble watchapp and Android companion for using [Hermes Agent](https://github.
 
 <p>
   <img src="docs/screenshots/splash.png" width="144" alt="Launch screen: the Hermes girl in green and violet pixels over the Wristbound name">
-  <img src="docs/screenshots/sessions.png" width="144" alt="Main menu: Recent audio (1 new), New session, then the session list">
-  <img src="docs/screenshots/recent-audio.png" width="144" alt="Recent audio: audio replies from any session, newest first, with age and a preview">
-  <img src="docs/screenshots/session.png" width="144" alt="An open session, newest message first, with a Reply row on top">
-  <img src="docs/screenshots/reply.png" width="144" alt="A full Hermes reply">
+  <img src="docs/screenshots/home.png" width="144" alt="Home: New session, Recent audio (1 new), Sessions (1 new of 3)">
+  <img src="docs/screenshots/sessions.png" width="144" alt="Sessions: Watch chat (new, working), Index: groceries (telegram), Repo cleanup (read-only)">
+  <img src="docs/screenshots/session.png" width="144" alt="A conversation: your message in a bubble, Hermes' reply below it with an audio mark">
+  <img src="docs/screenshots/working.png" width="144" alt="A reply streaming into the conversation as Hermes writes it">
+  <img src="docs/screenshots/banner.png" width="144" alt="A new audio reply as a banner over the lower part of the home screen">
   <img src="docs/screenshots/actions.png" width="144" alt="Reply actions: Play on headphones, Play on phone speaker, Replay from start">
+  <img src="docs/screenshots/recent-audio.png" width="144" alt="Recent audio: audio replies from any session, newest first, with age and a preview">
   <img src="docs/screenshots/compose.png" width="144" alt="Compose: Dictate, or a quick reply such as Yes, No, Continue">
-  <img src="docs/screenshots/working.png" width="144" alt="A sent reply showing Hermes is working, with a block cursor">
 </p>
 
 <p>
   <img src="docs/screenshots/chalk-splash.png" width="144" alt="Launch screen on the round Pebble Time Round">
+  <img src="docs/screenshots/chalk-home.png" width="144" alt="Home on the round Pebble Time Round">
   <img src="docs/screenshots/chalk-sessions.png" width="144" alt="Session list on the round Pebble Time Round">
-  <img src="docs/screenshots/chalk-session.png" width="144" alt="An open session on the round screen">
-  <img src="docs/screenshots/chalk-reply.png" width="144" alt="A reply flowing within the round screen">
+  <img src="docs/screenshots/chalk-session.png" width="144" alt="A conversation on the round screen">
+  <img src="docs/screenshots/chalk-banner.png" width="144" alt="A reply banner in the lower bowl of the round screen">
 </p>
 
 *Basalt (Pebble Time) and Chalk (Pebble Time Round) emulators, driven by the scripted phone in `watch/tools/fake_phone.py`; the conversation is canned.*
@@ -60,14 +62,15 @@ The phone talks to Hermes the way the Hermes desktop app and Hermes-Relay do: it
 
 ### On the watch
 
-- **Recent audio:** the main menu opens on a list of Hermes audio replies from every session, newest first, marked new until opened. Each opens as a reply card with Play, Reply and Open session, so incoming audio never needs hunting for.
-- **Sessions:** recent sessions with unread, Telegram, working and read-only labels; a Telegram show/hide toggle; New session; Refresh (or long-press). The last session is remembered across launches.
-- **History:** recent messages, newest first, and a full-screen view for each reply.
+- **Home:** New session, Continue (the last session), Recent audio and Sessions, with the connection state at the top.
+- **Recent audio:** Hermes audio replies from every session, newest first, marked new until opened. Each opens as a reply card with Play, Reply and Open session, so incoming audio never needs hunting for.
+- **Sessions:** recent sessions with unread, Telegram, working and read-only labels; long-press to refresh. The last session is remembered across launches.
+- **Conversation:** a session opens as one scrolling conversation, your messages and Hermes' replies together, and a reply streams in as Hermes writes it. Select replies; hold Select for playback of the reply in focus, Newest and Refresh.
 - **Reply:** dictation where the watch has a microphone, or a quick reply (Yes, No, Continue, Thanks, Stop, Summarise that). Each send shows queued, working, completed, failed, uncertain or read-only.
 - **Playback** of one exact reply: Play on headphones (shown only while headphones are connected to the phone), Play on phone speaker (the phone's own speaker, even with headphones in), Pause, Resume, Replay from start, Stop.
 - **Play on watch speaker** (Pebble Time 2 and Pebble 2 Duo): the reply's own Hermes audio, streamed from the phone and played by the watch, with buffering progress, Pause/Resume, Stop and Replay on watch. Always an explicit choice; it never falls back to the phone's speaker. Clips are capped at 2 minutes. Other watches do not show the action.
-- **Quick Launch:** assign Wristbound to a Quick Launch button in the Pebble settings, then pick what it does under *Options → Quick launch* in the app: the main menu, *Dictate new session* (straight into dictation for a new session), *Recent audio*, *Play latest audio* (opens and plays the newest audio reply, on headphones if connected, otherwise the phone speaker) or *Last session*. Opening the app normally always shows the main menu.
-- **Alerts:** an incoming-reply card when the app is open, even over the same session, with Play, Reply, Open session and Dismiss.
+- **Quick Launch:** assign Wristbound to a Quick Launch button in the Pebble settings, then pick what it does in the companion app under *Watch → Watchapp opens on*: *Home*, *Dictate a new session* (straight into dictation for a new session), *Recent audio*, *Play latest audio* (opens and plays the newest audio reply, on headphones if connected, otherwise the phone speaker) or *Last session*. Opening the app normally always shows Home.
+- **Alerts:** a reply that arrives while the app is open slides up as a banner over the lower part of the screen, in Phosphor green (violet for audio), with the session and the start of the reply. Select opens the conversation at that reply; Back puts it away, and it fades after 15 s. A reply in the conversation on screen just appears there.
 - Clear connection states: connected, offline with cached data, stale, not set up, sign-in failed.
 
 ### On the phone

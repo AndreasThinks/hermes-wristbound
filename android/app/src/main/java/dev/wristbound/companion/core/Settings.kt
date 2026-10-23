@@ -65,6 +65,14 @@ class Settings(context: Context) : BoundCredentialStore {
 
     val isConfigured: Boolean get() = credentials != null
 
+    /**
+     * What the watchapp opens on ([dev.wristbound.companion.pebble.Protocol.QuickLaunch]), or
+     * null until it is chosen here: the watch's own earlier choice is then adopted on HELLO.
+     */
+    var quickLaunch: Int?
+        get() = prefs.getInt("quick_launch", -1).takeIf { it >= 0 }
+        set(v) = prefs.edit().apply { if (v == null) remove("quick_launch") else putInt("quick_launch", v) }.apply()
+
     var includeTelegram: Boolean
         get() = prefs.getBoolean("include_telegram", true)
         set(v) = prefs.edit().putBoolean("include_telegram", v).apply()

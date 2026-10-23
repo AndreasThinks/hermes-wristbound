@@ -85,6 +85,8 @@ static void prv_pump(void) {
     case CMD_HELLO:
       dict_write_uint16(iter, MESSAGE_KEY_TextBudget, TEXT_BUDGET);
       dict_write_uint8(iter, MESSAGE_KEY_ProtoVersion, PROTO_VERSION);
+      // What the watch opens on, so a phone that has no choice saved yet keeps the watch's.
+      dict_write_uint8(iter, MESSAGE_KEY_State, g_model.quick_launch);
       if (p->session_id[0]) {
         dict_write_cstring(iter, MESSAGE_KEY_SessionId, p->session_id);
       }

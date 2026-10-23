@@ -9,8 +9,8 @@ import io.rebble.pebblekit2.common.model.PebbleDictionaryItem
 
 /** Commands decoded from watch AppMessages. */
 sealed class WatchCommand {
-    data class Hello(val textBudget: Int, val protoVersion: Int, val includeTelegram: Boolean, val sessionId: String?) : WatchCommand()
-    data class ListSessions(val includeTelegram: Boolean) : WatchCommand()
+    data class Hello(val textBudget: Int, val protoVersion: Int, val quickLaunch: Int?, val sessionId: String?) : WatchCommand()
+    data object ListSessions : WatchCommand()
     data class OpenSession(val sessionId: String) : WatchCommand()
     data class Send(val sessionId: String, val text: String) : WatchCommand()
     data class NewSession(val text: String) : WatchCommand()
@@ -19,7 +19,7 @@ sealed class WatchCommand {
     data object Pause : WatchCommand()
     data class Resume(val speaker: Boolean) : WatchCommand()
     data object Stop : WatchCommand()
-    data class ListAudio(val includeTelegram: Boolean) : WatchCommand()
+    data object ListAudio : WatchCommand()
     data class OpenReply(val sessionId: String, val messageId: String) : WatchCommand()
     /** Play one reply on the watch's own speaker; [chunkBytes] is the most PCM one message can carry. */
     data class PlayOnWatch(val sessionId: String, val messageId: String, val chunkBytes: Int) : WatchCommand()
@@ -49,10 +49,10 @@ object WatchCodec {
             Protocol.Cmd.HELLO -> WatchCommand.Hello(
                 textBudget = int(Key.TEXT_BUDGET) ?: Protocol.DEFAULT_TEXT_BUDGET,
                 protoVersion = int(Key.PROTO_VERSION) ?: 0,
-                includeTelegram = (int(Key.FILTER) ?: 1) != 0,
+                quickLaunch = int(Key.STATE)?.takeIf { it in 0 until Protocol.QuickLaunch.COUNT },
                 sessionId = str(Key.SESSION_ID)?.takeIf { it.isNotEmpty() },
             )
-            Protocol.Cmd.LIST_SESSIONS -> WatchCommand.ListSessions((int(Key.FILTER) ?: 1) != 0)
+            Protocol.Cmd.LIST_SESSIONS -> WatchCommand.ListSessions
             Protocol.Cmd.OPEN_SESSION -> str(Key.SESSION_ID)?.let { WatchCommand.OpenSession(it) }
             Protocol.Cmd.SEND -> {
                 val sid = str(Key.SESSION_ID)
@@ -73,7 +73,7 @@ object WatchCodec {
             Protocol.Cmd.PAUSE -> WatchCommand.Pause
             Protocol.Cmd.RESUME -> WatchCommand.Resume(speaker())
             Protocol.Cmd.STOP -> WatchCommand.Stop
-            Protocol.Cmd.LIST_AUDIO -> WatchCommand.ListAudio((int(Key.FILTER) ?: 1) != 0)
+            Protocol.Cmd.LIST_AUDIO -> WatchCommand.ListAudio
             Protocol.Cmd.PLAY_WATCH -> {
                 val sid = str(Key.SESSION_ID)?.takeIf { it.isNotEmpty() } ?: return null
                 val mid = str(Key.MESSAGE_ID)?.takeIf { it.isNotEmpty() } ?: return null
@@ -179,6 +179,19 @@ object WatchCodec {
             Key.FLAGS to u8(message.flags or if (truncated) Protocol.MessageFlag.TRUNCATED else 0),
         )
     }
+
+    /** The reply so far in [sessionId], while Hermes is still writing it. */
+    fun stream(sessionId: String, textSoFar: String, textBudget: Int): PebbleDictionary = mapOf(
+        Key.TYPE to u8(Protocol.Type.STREAM),
+        Key.SESSION_ID to text(sessionId, Protocol.SESSION_ID_BUDGET),
+        Key.TEXT to PebbleDictionaryItem.Text(Text.fit(textSoFar, textBudget).first),
+    )
+
+    /** Watch settings that live in the companion app. */
+    fun config(quickLaunch: Int): PebbleDictionary = mapOf(
+        Key.TYPE to u8(Protocol.Type.CONFIG),
+        Key.STATE to u8(quickLaunch.coerceIn(0, Protocol.QuickLaunch.COUNT - 1)),
+    )
 
     fun playback(messageId: String?, state: Protocol.Playback, detail: String): PebbleDictionary = mapOf(
         Key.TYPE to u8(Protocol.Type.PLAYBACK),

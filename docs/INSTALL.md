@@ -52,9 +52,9 @@ Credentials are encrypted in Android Keystore-backed storage and bound to the is
 
 Install Wristbound through its Pebble Store listing. Alternatively download `wristbound-vX.Y.Z.pbw` from the same GitHub release and open it with the Pebble Android app.
 
-**Use matching phone/watch versions.** Version 0.4.0 uses protocol v4. Updating only one side can result in an Update watch or phone app warning. Installing a watch update with the same UUID replaces the old version; there is no need to remove it first.
+**Use matching phone/watch versions.** Version 0.4.0 uses protocol v4; later versions use protocol v5. Updating only one side can result in an Update watch or phone app warning. Installing a watch update with the same UUID replaces the old version; there is no need to remove it first.
 
-Open Wristbound on the watch. Recent audio and New session are at the top, followed by sessions and an Options section. Open a conversation to read history, dictate where supported or use a quick reply.
+Open Wristbound on the watch. The home screen has New session, Continue (the last session), Recent audio and Sessions. A session opens as one scrolling conversation: Select replies by dictation where supported or a quick reply, and a reply shows there as Hermes writes it. Hold Select for playback, Newest and Refresh. Watch options are set in the companion app, under Watch.
 
 ## 5. Incoming replies and audio
 
@@ -72,17 +72,17 @@ Retained Hermes-generated audio is played as the selected reply's audio. When on
 
 ## 6. Quick Launch
 
-First assign Wristbound to a Quick Launch button using the supported Pebble watch/phone settings. Then, **inside Wristbound on the watch**, scroll below the session list to **Options > Quick launch**. Press Select to cycle through:
+First assign Wristbound to a Quick Launch button using the supported Pebble watch/phone settings. Then, **in the Wristbound companion app**, choose under **Watch > Watchapp opens on**:
 
-- Main menu
-- Dictate new session
+- Home
+- Dictate a new session
 - Recent audio
 - Play latest audio
 - Last session
 
-The subtitle shows the saved choice. There is no separate picker screen yet. The destination setting is currently on the watch, not the Android companion; moving it to the companion is tracked in [issue #15](https://github.com/AndreasThinks/hermes-wristbound/issues/15).
+The watch is told at once if the watchapp is open, otherwise the next time it opens. A choice made on the watch in 0.4.0 is kept until you pick one in the companion app.
 
-It only affects actual hardware Quick Launch starts, not normal launches. **Play latest audio deliberately plays through headphones when connected, otherwise the phone speaker.** Pick Main menu or Recent audio for a silent shortcut. Ordinary incoming replies do not autoplay.
+It only affects actual hardware Quick Launch starts, not normal launches. **Play latest audio deliberately plays through headphones when connected, otherwise the phone speaker.** Pick Home or Recent audio for a silent shortcut. Ordinary incoming replies do not autoplay.
 
 ## Troubleshooting
 
@@ -92,7 +92,7 @@ It only affects actual hardware Quick Launch starts, not normal launches. **Play
 | Watch stays Connecting | Matching APK/PBW versions, Pebble Bluetooth link, companion installed and signed in; use Test connection on the phone. |
 | No incoming alert | Monitoring state, background switch when closed, permissions, text/audio policy, and a new reply after the initial baseline. |
 | Audio marker but no sound | Open the reply's action menu and explicitly choose an output. Audio markers alone do not start playback. |
-| Quick launch seems absent | It is below all sessions in the watch Options section; the phone does not configure it yet. |
+| Quick launch seems absent | It is in the companion app under Watch > Watchapp opens on, not on the watch. |
 | APK will not update | Read the signing-certificate warning above; preserve data/sign-in before any uninstall. |
 
 Report bugs at [GitHub Issues](https://github.com/AndreasThinks/hermes-wristbound/issues), including watch model/firmware, Android and app versions, exact action, and the visible error. Do not post passwords, tokens, cookies or private conversation content in public issues.
