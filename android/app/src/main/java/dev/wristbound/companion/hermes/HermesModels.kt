@@ -104,6 +104,7 @@ data class HermesMessage(
     val finish_reason: String? = null,
     /** How Hermes shows a row; set on rows Hermes wrote itself, such as a finished background task's notice. */
     val display_kind: String? = null,
+    val audio_attachments: List<AudioAttachment> = emptyList(),
 ) {
     /**
      * A user row Hermes wrote to start a turn of its own (a background process finished, a
@@ -155,14 +156,21 @@ data class HermesMessage(
      * path is Hermes' answer or the user's own recording is decided per turn by
      * `SessionMapper.replies`, not here.
      *
-     * Automatic voice replies (Telegram voice mode, auto-TTS after a voice note) never appear:
-     * Hermes sends them straight to the platform and deletes the file, without a transcript
-     * row. See docs/HERMES_API.md.
+     * Automatic voice uses typed attachments on the exact assistant row, separately from tags.
      */
     val audioRefs: List<String>
         get() = AUDIO_TAG.findAll(text.replace("\\/", "/"))
             .map { it.groupValues[1] }.distinct().toList()
 }
+
+@Serializable
+data class AudioAttachment(
+    val id: String,
+    val mime_type: String,
+    val created_at: Double,
+    val expires_at: Double? = null,
+    val part: Int = 0,
+)
 
 private val AUDIO_TAG = Regex(
     """MEDIA:([^\s"'<>\\]+?\.(?:mp3|ogg|opus|wav|m4a|aac|flac))(?![\w.])""",
@@ -173,6 +181,7 @@ private val AUDIO_TAG = Regex(
 data class MessageList(
     val session_id: String? = null,
     val messages: List<HermesMessage> = emptyList(),
+    val audio_messages: List<HermesMessage> = emptyList(),
 )
 
 /** `GET /api/status`: whether the dashboard requires sign-in, and which flows it offers. */

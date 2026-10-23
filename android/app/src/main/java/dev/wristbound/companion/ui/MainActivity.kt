@@ -163,7 +163,7 @@ class MainActivity : AppCompatActivity() {
             kinds.forEach { it.isEnabled = on }
         })
         kinds.forEach { it.isEnabled = s.notifyReplies; column.addView(it) }
-        column.addView(note("Alerts show on the open watchapp, or as a phone notification the Pebble mirrors. Nothing plays until you press Play."))
+        column.addView(note("Alerts show on the open watchapp, or as native Pebble notifications forwarded from Android. The Hermes replies · silent on phone channel keeps a shade record without phone sound or vibration by default. Enable Wristbound forwarding in the Pebble app; watch vibration depends on its settings. Nothing plays until you press Play."))
         column.addView(switch("Notify when Hermes uses a tool", s.toolActivity == ToolActivity.NOTIFY) {
             s.toolActivity = if (it) ToolActivity.NOTIFY else ToolActivity.SILENT
         })

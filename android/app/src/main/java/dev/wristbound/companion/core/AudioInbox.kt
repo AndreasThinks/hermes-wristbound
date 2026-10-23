@@ -23,8 +23,7 @@ data class AudioItem(
  * shows at once and survives a restart or an offline phone.
  *
  * Window: the [SESSIONS] most recently active visible sessions, the last [MESSAGES] transcript
- * rows of each, and the newest [MAX_ITEMS] replies overall. Audio Hermes never kept (Telegram's
- * automatic voice replies) cannot appear, and the user's own recordings are excluded by
+ * rows of each, and the newest [MAX_ITEMS] replies overall. Retained automatic voice and MEDIA tool audio are included; the user's recordings are excluded by
  * [SessionMapper.replies].
  */
 object AudioInbox {

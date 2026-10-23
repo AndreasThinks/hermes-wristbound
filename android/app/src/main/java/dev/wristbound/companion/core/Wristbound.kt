@@ -547,27 +547,21 @@ class Wristbound private constructor(context: Context) {
      * or a notification was posted. A watch that does not acknowledge is treated as closed, so
      * a missed close event cannot swallow alerts, and the phone notification is used instead.
      */
-    private suspend fun deliverAlert(alert: ReplyAlert): Boolean {
-        val sessionId = alert.sessionId
-        if (alert.silent) {
-            // Audio arrived for a reply that already alerted. The watch's message list picks it
-            // up on its next refresh; a notification is updated without alerting again.
-            if (!watchOpen) notifier.reply(sessionId, alert.messageId, alert.title, Text.forWatch(alert.text), settings.privatePreviews, alert.hasAudio, true)
-            return true
-        }
-        if (watchOpen) {
-            if (sendReplyToWatch(sessionId, alert.messageId, alert.text, alert.hasAudio)) {
-                Log.i(TAG, "alert ${alert.messageId}: shown on watch")
-                sessionsById[sessionId]?.let { if (state.openSessionId == sessionId) state.markSeen(sessionId, it.activity) }
-                return true
+    private suspend fun deliverAlert(alert: ReplyAlert): Boolean = ReplyDelivery(
+        watchOpen = { watchOpen },
+        sendWatch = { reply ->
+            val acknowledged = sendReplyToWatch(reply.sessionId, reply.messageId, reply.text, reply.hasAudio)
+            if (acknowledged && state.openSessionId == reply.sessionId) {
+                sessionsById[reply.sessionId]?.let { state.markSeen(it.id, it.activity) }
             }
-            Log.w(TAG, "alert ${alert.messageId}: watch did not acknowledge; treating the watchapp as closed")
-            setWatchOpen(false)
-        }
-        val posted = notifier.reply(sessionId, alert.messageId, alert.title, Text.forWatch(alert.text), settings.privatePreviews, alert.hasAudio, false)
-        Log.i(TAG, "alert ${alert.messageId}: " + if (posted) "phone notification posted" else "not delivered (notifications blocked)")
-        return posted
-    }
+            acknowledged
+        },
+        closeWatch = { setWatchOpen(false) },
+        postNative = { reply ->
+            notifier.reply(reply.sessionId, reply.messageId, reply.title, reply.text,
+                settings.privatePreviews, reply.hasAudio, reply.silent)
+        },
+    ).deliver(alert)
 
     /** Show one reply as a card on the watch. True when the watch acknowledged it. */
     private suspend fun sendReplyToWatch(
@@ -691,11 +685,18 @@ class Wristbound private constructor(context: Context) {
             return
         }
         onPlaybackState(messageId, Protocol.Playback.IDLE, "Getting Hermes audio")
-        val clip = reply.audio.firstNotNullOfOrNull { path ->
-            runCatching { api.fetchAudio(path, audioDir) }.onFailure { Log.d(TAG, "audio fetch failed: ${it.message}") }.getOrNull()
+        val clips = try {
+            if (reply.audio.any { it.startsWith("attachment:") }) {
+                // Automatic speech parts are sequential, not alternative encodings.
+                reply.audio.filter { it.startsWith("attachment:") }.map { api.fetchAudio(it, audioDir) }
+            } else listOfNotNull(reply.audio.firstNotNullOfOrNull { path ->
+                runCatching { api.fetchAudio(path, audioDir) }.getOrNull()
+            })
+        } catch (e: IOException) {
+            emptyList()
         }
-        pruneAudio()
-        if (clip != null) playback.playFile(messageId, clip.file, speaker, "Playing Hermes audio")
+        pruneAudio(clips.map { it.file }.toSet())
+        if (clips.isNotEmpty()) playback.playFiles(messageId, clips.map { it.file }, speaker, "Playing Hermes audio")
         else onPlaybackState(messageId, Protocol.Playback.ERROR, "Could not get the audio")
     }
 
@@ -717,16 +718,29 @@ class Wristbound private constructor(context: Context) {
             val api = api() ?: return fail("Set up phone app")
             val reply = replyFor(sessionId, messageId) ?: return fail("Reply not found")
             if (reply.audio.isEmpty()) return fail("No Hermes audio for this reply")
-            val source = reply.audio.firstNotNullOfOrNull { path ->
-                runCatching { api.fetchAudio(path, audioDir) }.onFailure { Log.d(TAG, "audio fetch failed: ${it.message}") }.getOrNull()
-            } ?: return fail("Could not get the audio")
-            pruneAudio()
+            val sources = try {
+                if (reply.audio.any { it.startsWith("attachment:") }) {
+                    reply.audio.filter { it.startsWith("attachment:") }.map { api.fetchAudio(it, audioDir) }
+                } else listOfNotNull(reply.audio.firstNotNullOfOrNull { path ->
+                    runCatching { api.fetchAudio(path, audioDir) }.getOrNull()
+                })
+            } catch (e: IOException) {
+                return fail("Could not get the audio")
+            }
+            if (sources.isEmpty()) return fail("Could not get the audio")
+            pruneAudio(sources.map { it.file }.toSet())
             val converted = try {
                 withContext(Dispatchers.Default) {
-                    val decoded = AudioDecoder.decode(source.file)
-                    val seconds = decoded.samples.size / decoded.channels / decoded.sampleRate
-                    val suffix = if (seconds >= PcmConverter.MAX_SECONDS) " (first 2 min)" else ""
-                    PcmConverter.forWatch(decoded.samples, decoded.sampleRate, decoded.channels) to "Hermes audio$suffix"
+                    val output = java.io.ByteArrayOutputStream()
+                    val limit = PcmConverter.WATCH_RATE * PcmConverter.MAX_SECONDS
+                    for (source in sources) {
+                        if (output.size() >= limit) break
+                        val decoded = AudioDecoder.decode(source.file)
+                        val bytes = PcmConverter.forWatch(decoded.samples, decoded.sampleRate, decoded.channels)
+                        output.write(bytes, 0, bytes.size.coerceAtMost(limit - output.size()))
+                    }
+                    val suffix = if (output.size() >= limit) " (first 2 min)" else ""
+                    output.toByteArray() to "Hermes audio$suffix"
                 }
             } catch (e: IOException) {
                 return fail("Cannot convert this audio")
@@ -747,9 +761,9 @@ class Wristbound private constructor(context: Context) {
     }
 
     /** Keep the audio cache small: the newest files only. */
-    private fun pruneAudio() {
+    private fun pruneAudio(keep: Set<File> = emptySet()) {
         val files = audioDir.listFiles()?.sortedByDescending { it.lastModified() } ?: return
-        files.drop(MAX_AUDIO_FILES).forEach { it.delete() }
+        files.filter { it !in keep }.drop((MAX_AUDIO_FILES - keep.size).coerceAtLeast(0)).forEach { it.delete() }
     }
 
     private fun onPlaybackState(messageId: String?, s: Protocol.Playback, detail: String) {

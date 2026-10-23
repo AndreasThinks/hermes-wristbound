@@ -140,7 +140,9 @@ object SessionMapper {
                 .flatMap { it.audioRefs }
                 .filter { it.substringAfterLast('/').let { name -> name !in userFiles && !INBOUND_AUDIO.matches(name) } }
                 .distinct()
-            Reply(index, messages[index], audio, background)
+            // Typed attachments are already associated by Hermes; never borrow a sibling's.
+            val attached = messages[index].audio_attachments.sortedBy { it.part }.map { "attachment:${it.id}" }
+            Reply(index, messages[index], (audio + attached).distinct(), background)
         }
     }
 

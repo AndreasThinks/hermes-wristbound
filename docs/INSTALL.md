@@ -68,7 +68,7 @@ Playback actions:
 - **Play on phone speaker:** explicitly requests the phone speaker, including with headphones connected. This new routing behavior still needs broader hardware testing.
 - **Play on watch speaker:** explicit streaming to a supported watch speaker. This experimental route uses low-bandwidth audio, is capped at two minutes and may buffer. Audible output/throughput has not yet been confirmed on the physical watch in this project's acceptance tests.
 
-Only retained Hermes-generated audio is playable. Text-only replies have no Play actions: Wristbound no longer generates substitute read-aloud speech. Telegram's automatic voice replies may not be retained in the transcript; Wristbound cannot recover deleted media. If an audio attachment cannot be fetched, playback reports an error rather than substituting another voice.
+Only retained Hermes-generated audio is playable. Text-only replies have no Play actions: Wristbound no longer generates substitute read-aloud speech. Automatic voice requires the matching Hermes attachment backend; older servers and already-deleted media cannot supply it. Enable Wristbound notification forwarding in Pebble and review the new “Hermes replies · silent on phone” channel. Existing channel choices are not rewritten; watch forwarding/vibration with silent phone delivery requires device testing. If an audio attachment cannot be fetched, playback reports an error rather than substituting another voice.
 
 ## Approvals
 

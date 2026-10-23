@@ -17,7 +17,7 @@ import dev.wristbound.companion.pebble.Protocol
 import java.io.File
 
 /**
- * Plays one exact reply's Hermes audio, chosen by message id ([playFile]). Text replies are never
+ * Plays one exact reply's Hermes audio, chosen by message id ([playFiles]). Text replies are never
  * read aloud. Each request names its output. On headphones,
  * playback never silently falls back to the loudspeaker: without them it reports
  * [Protocol.Playback.NEEDS_SPEAKER], and a headphone disconnect pauses rather than continuing
@@ -37,6 +37,7 @@ class PlaybackController(
     private var focusRequest: AudioFocusRequest? = null
     private var noisyRegistered = false
     private var onSpeaker = false
+    private val remaining = java.util.ArrayDeque<File>()
 
     private val attributes = AudioAttributes.Builder()
         .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -75,9 +76,10 @@ class PlaybackController(
         }, Handler(Looper.getMainLooper()))
     }
 
-    /** Play the audio file [file] for [id] from the start; [label] is what the watch shows. */
+    /** Play ordered parts of the same reply; no synthesis and no implicit speaker fallback. */
     @Synchronized
-    fun playFile(id: String, file: File, speaker: Boolean, label: String) {
+    fun playFiles(id: String, files: List<File>, speaker: Boolean, label: String) {
+        if (files.isEmpty()) return
         if (!speaker && !hasPrivateOutput()) {
             onState(id, Protocol.Playback.NEEDS_SPEAKER, "No headphones")
             return
@@ -86,18 +88,22 @@ class PlaybackController(
         messageId = id
         onSpeaker = speaker
         playerLabel = label
+        remaining.addAll(files)
+        prepareNext(id)
+    }
+
+    private fun prepareNext(id: String) {
+        val file = remaining.pollFirst() ?: return
         val mp = MediaPlayer()
         try {
             mp.setAudioAttributes(attributes)
-            if (speaker) builtInSpeaker()?.let { mp.setPreferredDevice(it) }
             mp.setDataSource(file.absolutePath)
-            mp.setOnCompletionListener { done(id) }
-            mp.setOnErrorListener { _, _, _ -> failed(id); true }
+            mp.setOnCompletionListener { if (player === mp) done(id) }
+            mp.setOnErrorListener { _, _, _ -> if (player === mp) failed(id); true }
             mp.prepare()
         } catch (e: Exception) {
             mp.release()
-            messageId = null
-            onState(id, Protocol.Playback.ERROR, "Cannot play this audio")
+            failed(id)
             return
         }
         player = mp
@@ -122,7 +128,6 @@ class PlaybackController(
             return
         }
         onSpeaker = speaker
-        player?.setPreferredDevice(if (speaker) builtInSpeaker() else null)
         startPlayer()
     }
 
@@ -132,6 +137,13 @@ class PlaybackController(
     private fun startPlayer() {
         val mp = player ?: return
         val id = messageId ?: return
+        val output = if (onSpeaker) builtInSpeaker() else
+            audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).firstOrNull { it.type in PRIVATE_OUTPUTS }
+        if (output == null || !mp.setPreferredDevice(output)) {
+            onState(id, if (onSpeaker) Protocol.Playback.ERROR else Protocol.Playback.NEEDS_SPEAKER,
+                if (onSpeaker) "Speaker unavailable" else "Connect headphones or choose speaker")
+            return
+        }
         if (!requestFocus()) {
             onState(id, Protocol.Playback.ERROR, "Audio busy")
             return
@@ -148,6 +160,10 @@ class PlaybackController(
         playing = false
         releasePlayer()
         releaseFocus()
+        if (remaining.isNotEmpty()) {
+            prepareNext(id)
+            return
+        }
         messageId = null
         onState(id, Protocol.Playback.DONE, "Finished")
     }
@@ -159,6 +175,7 @@ class PlaybackController(
         releasePlayer()
         releaseFocus()
         messageId = null
+        remaining.clear()
         onState(id, Protocol.Playback.ERROR, "Playback failed")
     }
 
@@ -174,6 +191,7 @@ class PlaybackController(
 
     private fun stopInternal(report: Boolean) {
         val id = messageId
+        remaining.clear()
         playing = false
         releasePlayer()
         releaseFocus()

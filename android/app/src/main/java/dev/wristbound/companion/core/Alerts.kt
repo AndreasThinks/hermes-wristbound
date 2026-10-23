@@ -164,9 +164,12 @@ class ReplyAlerts(
      * Returns false when an alert was due but could not be delivered (and will be retried).
      */
     private suspend fun consider(session: HermesSession, reply: SessionMapper.Reply, floor: Double?, watchTurn: Boolean): Boolean {
-        if (floor != null && !store.isAlerted(reply.id) && (reply.message.timestamp ?: Double.MAX_VALUE) <= floor + EPSILON) return true
+        val latestAudio = reply.message.audio_attachments.maxOfOrNull { it.created_at } ?: 0.0
+        if (floor != null && !store.isAlerted(reply.id) &&
+            maxOf(reply.message.timestamp ?: Double.MAX_VALUE, latestAudio) <= floor + EPSILON) return true
         val decision = decide(session, reply, policy(), AlertPolicy.kindOf(session, reply, watchTurn)) ?: return true
         if (deliver(decision.alert)) {
+            store.markAlerted(DELIVERED_PREFIX + reply.id)
             synchronized(failures) { failures.remove(reply.id) }
             return true
         }
@@ -197,7 +200,7 @@ class ReplyAlerts(
         if (!reply.hasAudio || !store.markAlerted(audioKey)) return null
         return when {
             // The text already alerted: add Play to it without alerting again.
-            policy.textAlerts(kind) -> alert(silent = true, listOf(audioKey))
+            policy.enabled && store.isAlerted(DELIVERED_PREFIX + reply.id) -> alert(silent = true, listOf(audioKey))
             policy.audioAlerts -> alert(silent = false, listOf(audioKey))
             else -> null
         }
@@ -209,6 +212,7 @@ class ReplyAlerts(
 
     companion object {
         const val AUDIO_PREFIX = "audio:"
+        const val DELIVERED_PREFIX = "delivered:"
         const val MAX_ATTEMPTS = 5
         private const val EPSILON = 0.001
         private const val MAX_CURSORS = 200
