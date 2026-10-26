@@ -7,6 +7,7 @@ It speaks the AppMessage protocol from docs/PROTOCOL.md with canned data: no Her
     python3 tools/fake_phone.py basalt &      # run with pebble-tool's Python (needs libpebble2)
     python3 tools/fake_phone.py basalt headphones &   # as if headphones were connected to the phone
     python3 tools/fake_phone.py basalt alert &        # a reply from another session arrives 8 s in
+    python3 tools/fake_phone.py basalt textalert &    # the same, a text reply with a short list
     python3 tools/fake_phone.py basalt quick=1 &      # Quick launch choice the phone app sends (TYPE_CONFIG)
     python3 tools/fake_phone.py basalt approve &      # a sent message makes Hermes ask before a command
     pebble emu-button click select --emulator basalt
@@ -59,7 +60,7 @@ AUDIO = [
 TONE = bytes(int(100 * math.sin(2 * math.pi * 440 * i / 8000)) & 0xFF for i in range(8000 * 4))
 
 
-def main(platform, headphones, alert, quick, approve=False):
+def main(platform, headphones, alert, quick, approve=False, text_alert=False):
     with open(os.path.join(tempfile.gettempdir(), "pb-emulator.json")) as state_file:
         state = json.load(state_file)[platform]
     port = next(iter(state.values()))["pypkjs"]["port"]
@@ -164,6 +165,11 @@ def main(platform, headphones, alert, quick, approve=False):
                     "Type": 4, "SessionId": "tg_1", "MessageId": "42", "Title": "Index: groceries",
                     "Text": "Oat milk is on offer at the corner shop until Sunday, so I've moved it to "
                             "the top of the list. Want me to add coffee too?", "Flags": 2})).start()
+            if text_alert:
+                threading.Timer(8, lambda: send({
+                    "Type": 4, "SessionId": "tg_1", "MessageId": "43", "Title": "Index: groceries",
+                    "Text": "Done, coffee is on the list.\n\u2022 Coffee beans\n\u2022 Oat milk\n\u2022 Eggs",
+                    "Flags": 0})).start()
         if cmd == 1 or cmd == 2:
             send_sessions(True)
             if cmd == 1:
@@ -209,4 +215,4 @@ if __name__ == "__main__":
     flags = sys.argv[2:]
     quick = next((int(f.split("=")[1]) for f in flags if f.startswith("quick=")), 0)
     main(sys.argv[1] if len(sys.argv) > 1 else "basalt", "headphones" in flags, "alert" in flags, quick,
-         "approve" in flags)
+         "approve" in flags, "textalert" in flags)

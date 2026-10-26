@@ -14,6 +14,11 @@
 #define BODY_BOTTOM PBL_IF_ROUND_ELSE(20, 2)
 #define LABEL_Y 7
 #define BODY_Y 18
+// The first sentence or line, in bold, when it is short enough to read at a glance.
+#define HEAD_BYTES 64
+#define HEAD_LINES_H 44
+#define CHIP_PAD 3
+#define HINT_H 12
 
 // The window has a clear background, so the window below it stays on screen above the card.
 static Window *s_window;
@@ -22,13 +27,14 @@ static AppTimer *s_tick;
 static int s_left_ms;
 static bool s_audio;
 static char s_title[TITLE_LEN + 8];
+static char s_head[HEAD_BYTES];
 static char s_text[PREVIEW_BYTES];
 static BannerOpenHandler s_open;
 static PropertyAnimation *s_slide;
 
 static GRect prv_card_frame(GRect screen) {
   // Rectangular screens: the lower ~45%. Round: the lower bowl, where the dial is still wide.
-  int h = PBL_IF_ROUND_ELSE(screen.size.h * 48 / 100, screen.size.h * 45 / 100);
+  int h = PBL_IF_ROUND_ELSE(screen.size.h * 50 / 100, screen.size.h * 52 / 100);
   return GRect(0, screen.size.h - h, screen.size.w, h);
 }
 
@@ -47,15 +53,43 @@ static void prv_draw(Layer *layer, GContext *ctx) {
 
   int x = PAD_X;
   int w = b.size.w - 2 * PAD_X;
+  // An audio reply says so in a filled tag at the end of the label row.
+  int chip_w = 0;
+  if (s_audio) {
+    GFont label = theme_font_label();
+    chip_w = graphics_text_layout_get_content_size("AUDIO", label, GRect(0, 0, w, 14),
+                                                   GTextOverflowModeTrailingEllipsis,
+                                                   GTextAlignmentLeft).w + 2 * CHIP_PAD;
+    GRect chip = GRect(x + w - chip_w, LABEL_Y - 3, chip_w, 13);
+    graphics_context_set_fill_color(ctx, accent);
+    graphics_fill_rect(ctx, chip, 0, GCornerNone);
+    theme_draw_label(ctx, GRect(chip.origin.x, LABEL_Y, chip_w, 14), "AUDIO", THEME_BG,
+                     GTextAlignmentCenter);
+    chip_w += 4;
+  }
   int mark_w = theme_draw_mark(ctx, GPoint(x, LABEL_Y + 5), s_audio ? THEME_MARK_WAVE : THEME_MARK_NEW,
                                accent);
-  theme_draw_label(ctx, GRect(x + mark_w, LABEL_Y, w - mark_w, 14), s_title, accent,
+  theme_draw_label(ctx, GRect(x + mark_w, LABEL_Y, w - mark_w - chip_w, 14), s_title, accent,
                    GTextAlignmentLeft);
 
+  GTextAlignment align = PBL_IF_ROUND_ELSE(GTextAlignmentCenter, GTextAlignmentLeft);
+  int bottom = b.size.h - BODY_BOTTOM - HINT_H;
+  int y = BODY_Y;
   graphics_context_set_text_color(ctx, THEME_FG);
-  graphics_draw_text(ctx, s_text, fonts_get_system_font(FONT_KEY_GOTHIC_18),
-                     GRect(x, BODY_Y, w, b.size.h - BODY_Y - BODY_BOTTOM), GTextOverflowModeTrailingEllipsis,
-                     PBL_IF_ROUND_ELSE(GTextAlignmentCenter, GTextAlignmentLeft), NULL);
+  if (s_head[0]) {
+    GFont bold = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+    GRect head = GRect(x, y, w, HEAD_LINES_H);
+    int head_h = graphics_text_layout_get_content_size(s_head, bold, head,
+                                                       GTextOverflowModeTrailingEllipsis, align).h;
+    graphics_draw_text(ctx, s_head, bold, head, GTextOverflowModeTrailingEllipsis, align, NULL);
+    y += head_h + 1;
+  }
+  if (s_text[0] && bottom - y >= 14) {
+    graphics_draw_text(ctx, s_text, fonts_get_system_font(FONT_KEY_GOTHIC_18), GRect(x, y, w, bottom - y),
+                       GTextOverflowModeTrailingEllipsis, align, NULL);
+  }
+  // The card leaves on its own, so it says what Select does while it is up.
+  theme_draw_label(ctx, GRect(x, bottom + LABEL_Y - 4, w, 14), "Select: open", THEME_DIM, align);
 }
 
 static void prv_tick(void *ctx) {
@@ -119,25 +153,63 @@ static void prv_unload(Window *window) {
   s_card = NULL;
 }
 
+// Copy the start of [src] into [dst], at most [size] - 1 bytes and never part of a code point,
+// with line breaks flattened into one flowing preview, as a notification shows it.
+static void prv_copy(char *dst, size_t size, const char *src, size_t len) {
+  if (len >= size) {
+    len = size - 1;
+    while (len > 0 && ((uint8_t)src[len] & 0xC0) == 0x80) {
+      len--;
+    }
+  }
+  memcpy(dst, src, len);
+  dst[len] = '\0';
+  for (size_t i = 0; i < len; i++) {
+    if (dst[i] == '\n') {
+      dst[i] = ' ';
+    }
+  }
+}
+
+// A short first line or sentence becomes the bold headline and the rest the preview below it;
+// a short reply is all headline. Otherwise the whole reply is the preview.
+static void prv_split(const char *text) {
+  size_t len = strlen(text);
+  size_t cut = 0;
+  size_t skip = 0;
+  for (size_t i = 1; i < len && i < HEAD_BYTES - 1; i++) {
+    if (text[i] == '\n') {
+      cut = i;
+      skip = 1;
+      break;
+    }
+    if ((text[i - 1] == '.' || text[i - 1] == '!' || text[i - 1] == '?') && text[i] == ' ') {
+      cut = i;
+      skip = 1;
+      break;
+    }
+  }
+  if (!cut && len < HEAD_BYTES) {
+    cut = len;
+  }
+  if (!cut) {
+    s_head[0] = '\0';
+    prv_copy(s_text, sizeof(s_text), text, len);
+    return;
+  }
+  prv_copy(s_head, sizeof(s_head), text, cut);
+  const char *rest = text + cut + (cut < len ? skip : 0);
+  while (*rest == ' ' || *rest == '\n') {
+    rest++;
+  }
+  prv_copy(s_text, sizeof(s_text), rest, strlen(rest));
+}
+
 void banner_show(const char *title, const char *text, bool audio, BannerOpenHandler on_open) {
   s_audio = audio;
   s_open = on_open;
   snprintf(s_title, sizeof(s_title), "%s", title && title[0] ? title : "Hermes");
-  // The start of the message only; the card ellipsises whatever does not fit.
-  size_t len = strlen(text ? text : "");
-  if (len >= sizeof(s_text)) {
-    len = sizeof(s_text) - 1;
-    while (len > 0 && ((uint8_t)text[len] & 0xC0) == 0x80) {
-      len--;
-    }
-  }
-  memcpy(s_text, text ? text : "", len);
-  s_text[len] = '\0';
-  for (size_t i = 0; i < len; i++) {
-    if (s_text[i] == '\n') {
-      s_text[i] = ' '; // one flowing preview, as a notification shows it
-    }
-  }
+  prv_split(text ? text : "");
   s_left_ms = SHOW_MS;
   if (!s_window) {
     s_window = window_create();
