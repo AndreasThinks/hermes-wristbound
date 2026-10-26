@@ -6,7 +6,15 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Background checks keep their interval with exact alarms. The companion is sideloaded,
+         so Play's limits on these permissions do not apply. -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
 
     <queries>
         <intent>
@@ -47,7 +55,11 @@
         <service
             android:name=".sync.SyncService"
             android:exported="false"
-            android:foregroundServiceType="remoteMessaging" />
+            android:foregroundServiceType="remoteMessaging|mediaPlayback" />
+
+        <receiver
+            android:name=".sync.CheckReceiver"
+            android:exported="false" />
 
         <receiver
             android:name=".notify.ActionReceiver"

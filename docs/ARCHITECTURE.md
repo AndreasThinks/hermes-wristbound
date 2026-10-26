@@ -18,7 +18,7 @@ Android companion (android/app/src/main/java/dev/wristbound/companion)
              Settings, LocalState (bounded cache and polling checkpoints)
   hermes/    DashboardAuth (PKCE, password, browser, session token), DashboardClient, Gateway (WebSocket JSON-RPC)
   playback/  PlaybackController (Hermes audio only; pause on disconnect)
-  sync/      SyncService (background polling), BootReceiver
+  sync/      SyncService (the one foreground service), CheckAlarm (background checks), BootReceiver
   notify/    Notifier and ActionReceiver (phone notification mirrored to the Pebble)
   ui/        MainActivity (connection and settings)
        |
@@ -29,7 +29,7 @@ Hermes dashboard (port 9119, published with tailscale serve)
 
 A watch reply runs like this: the watch sends a submit command with the session id and text; the companion resumes that session on the gateway socket, submits the prompt queued behind any running turn, and waits for the completion event; status updates (queued, working, completed, failed, uncertain) go back to the watch as they happen, and the answer arrives as a new message. If the socket drops after the prompt was sent, the companion never resends: it looks for the answer in the transcript, re-attaches to the turn, or reports *uncertain*.
 
-Replies that start elsewhere (Telegram, Ringbearer, the desktop) are found by polling the session list. One polling loop, owned by the controller, runs while the watchapp is open and, with background sync on, also while it is closed (the foreground service only keeps the process alive). Every delivery path goes through the same alert policy, which decides whether a reply alerts, alerts as audio, or updates silently, and records a checkpoint so it alerts once.
+Replies that start elsewhere (Telegram, Ringbearer, the desktop) are found by polling the session list. The controller owns the schedule: a timer loop while the watchapp is open (the Pebble app's binding keeps the process awake), and with background checking on (the default) exact alarms while it is closed, each check under a short wakelock, since a coroutine timer stops while the CPU sleeps. One foreground service keeps the process running whenever there is a reason (`KeepAlive`): background checking, a turn sent from the watch that has not finished, or a reply playing on the phone; it also holds the CPU while a turn streams and checks again when the network returns. Every delivery path goes through the same alert policy, which decides whether a reply alerts, alerts as audio, or updates silently, and records a checkpoint so it alerts once.
 
 The decisions behind these choices, and why the Hermes API server is not used, are in [HERMES_API.md](HERMES_API.md).
 

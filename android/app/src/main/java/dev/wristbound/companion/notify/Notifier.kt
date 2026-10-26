@@ -154,10 +154,11 @@ class Notifier(private val context: Context) {
         post(ERROR_ID, n)
     }
 
-    fun syncNotification(): Notification = NotificationCompat.Builder(context, CH_SYNC)
+    fun syncNotification(text: String): Notification = NotificationCompat.Builder(context, CH_SYNC)
         .setSmallIcon(R.drawable.ic_notification)
         .setContentTitle("Wristbound")
-        .setContentText("Watching Hermes for replies")
+        .setContentText(text)
+        .setSilent(true)
         .setOngoing(true)
         .setContentIntent(openApp())
         .build()
