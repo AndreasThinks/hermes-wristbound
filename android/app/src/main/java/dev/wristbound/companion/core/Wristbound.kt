@@ -20,7 +20,10 @@ import dev.wristbound.companion.pebble.WatchStream
 import dev.wristbound.companion.playback.AudioDecoder
 import dev.wristbound.companion.playback.PcmConverter
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import dev.wristbound.companion.playback.PlaybackController
+import dev.wristbound.companion.sync.CheckAlarm
+import dev.wristbound.companion.sync.SyncService
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -90,6 +93,9 @@ class Wristbound private constructor(context: Context) {
     }
     private val pollMutex = Mutex()
     private var monitor: Job? = null
+    private var mode = Monitor.OFF
+    /** A reply is playing or paused on the phone, which keeps the service up. */
+    @Volatile private var playing = false
     private val alerts = ReplyAlerts(state, ::alertPolicy) { deliverAlert(it) }
     private val audioDir = File(app.cacheDir, "audio").apply { mkdirs() }
 
@@ -472,8 +478,13 @@ class Wristbound private constructor(context: Context) {
                 if (watchOpen && state.openSessionId == sid) pushMessages(sid)
             }
         }
-        job.invokeOnCompletion { activeTurns.values.removeAll { it === job } }
+        job.invokeOnCompletion {
+            activeTurns.values.removeAll { it === job }
+            refreshService()
+        }
         activeTurns[key] = job
+        // Started while the watchapp is still open, so the turn can finish after it closes.
+        refreshService()
         job.start()
     }
 
@@ -599,27 +610,59 @@ class Wristbound private constructor(context: Context) {
     // -- reply monitoring -----------------------------------------------------------------------
 
     /**
-     * Replies from other surfaces (Telegram, Ringbearer, desktop) are found by polling. One loop
-     * runs while the watchapp is open, and also while it is closed when background sync is on
-     * (the foreground service keeps the process alive for that). Every transition goes through
-     * here, so there is never more than one loop.
+     * Replies from other surfaces (Telegram, Ringbearer, desktop) are found by polling. While the
+     * watchapp is open a timer loop runs; while it is closed, with background checking on, alarms
+     * wake the phone for each check ([CheckAlarm]), since a timer stops while the CPU sleeps.
+     * Every transition goes through here, so there is never more than one schedule, and the
+     * foreground service is kept in line with it.
      */
     @Synchronized
     fun updateMonitoring() {
-        val wanted = settings.isConfigured && (watchOpen || settings.backgroundSync)
-        if (wanted && monitor?.isActive != true) {
-            Log.i(TAG, "reply monitoring on")
-            monitor = scope.launch {
-                while (isActive) {
-                    pollOnce()
-                    delay(pollIntervalSeconds() * 1000L)
-                }
-            }
-        } else if (!wanted && monitor != null) {
-            Log.i(TAG, "reply monitoring off")
+        val wanted = Monitor.of(settings.isConfigured, watchOpen, settings.backgroundSync)
+        if (wanted != mode) {
+            Log.i(TAG, "reply monitoring: $mode -> $wanted")
             monitor?.cancel()
             monitor = null
+            CheckAlarm.cancel(app)
+            when (wanted) {
+                Monitor.LOOP -> monitor = scope.launch {
+                    while (isActive) {
+                        pollOnce()
+                        delay(pollIntervalSeconds() * 1000L)
+                    }
+                }
+                // Just after the watchapp closed or setup changed: one check now, then alarms.
+                Monitor.ALARMS -> CheckAlarm.schedule(app, FIRST_ALARM_SECONDS)
+                Monitor.OFF -> Unit
+            }
+            mode = wanted
         }
+        refreshService()
+    }
+
+    /** Why the companion must keep running with the watchapp closed. */
+    fun keepAlive() = KeepAlive(
+        checking = settings.isConfigured && settings.backgroundSync,
+        turns = activeTurns.size,
+        playing = playing,
+    )
+
+    private fun refreshService() = SyncService.sync(app, keepAlive())
+
+    /** One alarm-driven check while the watchapp is closed, then the next alarm. */
+    suspend fun backgroundCheck() {
+        // Restores the schedule and the service if Android killed the process since the last one;
+        // an exact alarm is allowed to start a foreground service.
+        updateMonitoring()
+        withTimeoutOrNull(BACKGROUND_CHECK_MS) { pollOnce() }
+        synchronized(this) {
+            if (mode == Monitor.ALARMS) CheckAlarm.schedule(app, settings.pollSeconds)
+        }
+    }
+
+    /** The network came back: catch up now rather than at the next check. */
+    fun onNetworkBack() {
+        if (mode != Monitor.OFF) scope.launch { pollOnce() }
     }
 
     /** How often replies are checked right now: faster while the watchapp is open. */
@@ -646,6 +689,7 @@ class Wristbound private constructor(context: Context) {
             Log.d(TAG, "poll failed: ${e.message}")
             return@withLock
         }
+        settings.lastCheckAt = System.currentTimeMillis()
         val moved = alerts.poll(sessions, busy = { activeTurns.containsKey(it) }) { id ->
             api.recentMessages(id, 20).also {
                 rememberReplies(it)
@@ -767,7 +811,18 @@ class Wristbound private constructor(context: Context) {
     }
 
     private fun onPlaybackState(messageId: String?, s: Protocol.Playback, detail: String) {
+        val active = s == Protocol.Playback.PLAYING || s == Protocol.Playback.PAUSED
+        if (active != playing) {
+            playing = active
+            refreshService()
+        }
         if (watchOpen) scope.launch { watch.send(WatchCodec.playback(messageId, s, detail)) }
+    }
+
+    init {
+        // Last, once every field is set: a fresh process (boot, an alarm, the Pebble app binding)
+        // picks up the check schedule and the foreground service where they were.
+        updateMonitoring()
     }
 
     companion object {
@@ -776,6 +831,8 @@ class Wristbound private constructor(context: Context) {
         private const val NEW_SESSION_TARGET = "\u0000new"
         private const val MAX_AUDIO_FILES = 24
         const val FOREGROUND_POLL_SECONDS = 30
+        private const val FIRST_ALARM_SECONDS = 5
+        private const val BACKGROUND_CHECK_MS = 30_000L
 
         @Volatile private var instance: Wristbound? = null
 

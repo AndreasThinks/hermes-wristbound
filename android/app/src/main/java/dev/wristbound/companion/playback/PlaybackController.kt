@@ -12,6 +12,7 @@ import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import androidx.core.content.ContextCompat
 import dev.wristbound.companion.pebble.Protocol
 import java.io.File
@@ -96,6 +97,8 @@ class PlaybackController(
         val file = remaining.pollFirst() ?: return
         val mp = MediaPlayer()
         try {
+            // Keeps the CPU awake for the clip with the screen off; released when playback stops.
+            mp.setWakeMode(context, PowerManager.PARTIAL_WAKE_LOCK)
             mp.setAudioAttributes(attributes)
             mp.setDataSource(file.absolutePath)
             mp.setOnCompletionListener { if (player === mp) done(id) }

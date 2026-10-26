@@ -130,13 +130,19 @@ class Settings(context: Context) : BoundCredentialStore {
         get() = prefs.getBoolean("private_previews", false)
         set(v) = prefs.edit().putBoolean("private_previews", v).apply()
 
+    /** On by default: without it, replies from other surfaces go unnoticed once the watchapp closes. */
     var backgroundSync: Boolean
-        get() = prefs.getBoolean("background_sync", false)
+        get() = prefs.getBoolean("background_sync", true)
         set(v) = prefs.edit().putBoolean("background_sync", v).apply()
 
     var pollSeconds: Int
         get() = prefs.getInt("poll_seconds", 60).coerceIn(15, 900)
         set(v) = prefs.edit().putInt("poll_seconds", v.coerceIn(15, 900)).apply()
+
+    /** When reply checking last reached Hermes, in wall-clock ms; 0 if never. */
+    var lastCheckAt: Long
+        get() = prefs.getLong("last_check_at", 0L)
+        set(v) = prefs.edit().putLong("last_check_at", v).apply()
 
     private inline fun <reified T : Enum<T>> enumValueOrDefault(name: String?, default: T): T =
         name?.let { runCatching { enumValueOf<T>(it) }.getOrNull() } ?: default

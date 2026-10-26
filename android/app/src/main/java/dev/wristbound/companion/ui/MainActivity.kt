@@ -1,6 +1,7 @@
 package dev.wristbound.companion.ui
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -11,8 +12,10 @@ import android.graphics.drawable.RippleDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings as AndroidSettings
 import android.text.Editable
+import android.text.format.DateUtils
 import android.text.InputType
 import android.text.SpannableString
 import android.text.Spanned
@@ -58,7 +61,6 @@ import dev.wristbound.companion.hermes.LoopbackReceiver
 import dev.wristbound.companion.hermes.SignInException
 import dev.wristbound.companion.notify.Notifier
 import dev.wristbound.companion.pebble.Protocol
-import dev.wristbound.companion.sync.SyncService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.io.IOException
@@ -85,6 +87,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var monitoring: TextView
     private lateinit var notificationStatus: TextView
     private lateinit var notificationButton: Button
+    private lateinit var batteryStatus: TextView
+    private lateinit var batteryButton: Button
     private lateinit var url: EditText
     private lateinit var status: TextView
 
@@ -175,7 +179,6 @@ class MainActivity : AppCompatActivity() {
         column.addView(note("Replies that arrive through Telegram, Ringbearer or the desktop are checked for every ${Wristbound.FOREGROUND_POLL_SECONDS} s while the watchapp is open. Background checking keeps going while the watchapp is closed and the phone is locked, with a silent ongoing notification. The first check after signing in only notes what is already there, so old conversations never alert."))
         column.addView(switch("Keep checking in the background", s.backgroundSync) {
             s.backgroundSync = it
-            if (it) SyncService.start(this) else SyncService.stop(this)
             controller.updateMonitoring()
             render()
         })
@@ -184,6 +187,10 @@ class MainActivity : AppCompatActivity() {
             s.pollSeconds = pollChoices[it]
             render()
         })
+        batteryStatus = note("")
+        column.addView(batteryStatus)
+        batteryButton = button("Allow background use", primary = false) { requestBatteryExemption() }
+        column.addView(batteryButton)
 
         column.addView(heading("Privacy"))
         column.addView(button("Clear cached conversations", primary = false) {
@@ -193,7 +200,7 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(screen(column))
         requestNotificationPermission()
-        if (s.backgroundSync) SyncService.start(this)
+        controller.updateMonitoring()
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -337,7 +344,13 @@ class MainActivity : AppCompatActivity() {
         if (!view.signedIn && s.signInExpired && status.text.isBlank()) status.text = view.connection
         watchStatus.text = if (controller.watchOpen) "\u25CF watchapp open" else "\u25CB watchapp closed"
         watchStatus.setTextColor(color(if (controller.watchOpen) R.color.phosphor_signal else R.color.phosphor_meta))
-        monitoring.text = controller.monitoringSummary()
+        val last = s.lastCheckAt
+        monitoring.text = controller.monitoringSummary() +
+            if (last > 0) " Last reached Hermes ${DateUtils.getRelativeTimeSpanString(last, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)}." else ""
+        val exempt = getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName) == true
+        batteryStatus.text = if (exempt) "Battery: unrestricted, so checks keep their pace while the phone sleeps."
+        else "Battery: optimised. Android may delay checks for many minutes while the phone sleeps, or stop them."
+        batteryButton.visibility = if (exempt) View.GONE else View.VISIBLE
         val canNotify = Notifier(this).canPost()
         notificationStatus.text = if (canNotify) "Notifications: allowed"
         else "Notifications: blocked. Replies cannot reach the watch while the watchapp is closed."
@@ -496,6 +509,17 @@ class MainActivity : AppCompatActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         render()
+    }
+
+    /**
+     * Ask to be left out of battery optimisation, so Doze does not hold back checks and turns.
+     * Play restricts this request, but the companion is installed directly, so it does not apply.
+     */
+    @SuppressLint("BatteryLife")
+    private fun requestBatteryExemption() {
+        val ask = Intent(AndroidSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))
+        runCatching { startActivity(ask) }
+            .recoverCatching { startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
     }
 
     /** Ask again, or open the app's notification settings once Android stops asking. */

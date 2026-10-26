@@ -91,7 +91,7 @@ When a turn in a Telegram session finishes, the reply is stored in that session 
 
 ## Remaining limits
 
-**Push delivery.** The gateway socket broadcasts `sessions.changed`, but holding a socket open on a locked phone is fragile, so replies that arrive through Telegram, Ringbearer or the desktop are still found by polling `GET /api/sessions`: every 30 s while the watchapp is open, and from the optional foreground service (30 s to 5 min) while it is closed. Replies to turns sent from the watch arrive live over the socket.
+**Push delivery.** The gateway socket broadcasts `sessions.changed`, but holding a socket open on a locked phone is fragile, so replies that arrive through Telegram, Ringbearer or the desktop are still found by polling `GET /api/sessions`: every 30 s while the watchapp is open, and on alarms from the background service (30 s to 5 min, on by default) while it is closed; deep Doze stretches that to about 9 minutes unless the app is exempt from battery optimisation. Replies to turns sent from the watch arrive live over the socket.
 
 **Server prompts.** Hermes asks its clients questions as JSON-RPC requests from the server (`{"id": "srq-…", "method": "approval", "params": {...}}`), answered with a response frame carrying the same id. It sends them only to connections that called `client.capabilities {server_requests: true}`; with no such client attached it gives up at once, so the phone always advertises. For a turn the phone runs:
 
