@@ -6,10 +6,11 @@ class ReplyDelivery(
     private val sendWatch: suspend (ReplyAlert) -> Boolean,
     private val closeWatch: () -> Unit,
     private val postNative: (ReplyAlert) -> Boolean,
+    private val prepareWatch: suspend () -> Boolean = { false },
 ) {
     suspend fun deliver(alert: ReplyAlert): Boolean {
         if (alert.silent) return watchOpen() || postNative(alert)
-        if (watchOpen()) {
+        if (watchOpen() || prepareWatch()) {
             if (sendWatch(alert)) return true
             closeWatch()
         }

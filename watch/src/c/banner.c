@@ -29,7 +29,8 @@ static bool s_audio;
 static char s_title[TITLE_LEN + 8];
 static char s_head[HEAD_BYTES];
 static char s_text[PREVIEW_BYTES];
-static BannerOpenHandler s_open;
+static BannerHandler s_open;
+static BannerHandler s_expire;
 static PropertyAnimation *s_slide;
 
 static GRect prv_card_frame(GRect screen) {
@@ -96,7 +97,9 @@ static void prv_tick(void *ctx) {
   s_tick = NULL;
   s_left_ms -= TICK_MS;
   if (s_left_ms <= 0) {
+    BannerHandler handler = s_expire;
     banner_hide();
+    if (handler) handler();
     return;
   }
   layer_mark_dirty(s_card);
@@ -104,7 +107,7 @@ static void prv_tick(void *ctx) {
 }
 
 static void prv_select(ClickRecognizerRef rec, void *ctx) {
-  BannerOpenHandler handler = s_open;
+  BannerHandler handler = s_open;
   banner_hide();
   if (handler) {
     handler();
@@ -205,9 +208,10 @@ static void prv_split(const char *text) {
   prv_copy(s_text, sizeof(s_text), rest, strlen(rest));
 }
 
-void banner_show(const char *title, const char *text, bool audio, BannerOpenHandler on_open) {
+void banner_show(const char *title, const char *text, bool audio, BannerHandler on_open, BannerHandler on_expire) {
   s_audio = audio;
   s_open = on_open;
+  s_expire = on_expire;
   snprintf(s_title, sizeof(s_title), "%s", title && title[0] ? title : "Hermes");
   prv_split(text ? text : "");
   s_left_ms = SHOW_MS;

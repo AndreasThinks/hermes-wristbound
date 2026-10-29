@@ -24,6 +24,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import dev.wristbound.companion.playback.PlaybackController
 import dev.wristbound.companion.sync.CheckAlarm
 import dev.wristbound.companion.sync.SyncService
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -75,6 +76,8 @@ class Wristbound private constructor(context: Context) {
     private class OpenApproval(val sessionId: String, val title: String, val request: ApprovalRequest, val answer: (String) -> Boolean)
     private val approvals = ConcurrentHashMap<String, OpenApproval>()
     @Volatile private var pendingReply: Pair<String, String>? = null
+    @Volatile private var helloSeen: CompletableDeferred<Unit>? = null
+    private val launchMutex = Mutex()
     @Volatile private var lastSend: Triple<String, String, Long>? = null
 
     private val activeTurns = ConcurrentHashMap<String, Job>()
@@ -200,6 +203,7 @@ class Wristbound private constructor(context: Context) {
                 }
                 // A question still waiting: the watch takes it over from the notification.
                 approvals.values.forEach { showApproval(it) }
+                helloSeen?.complete(Unit)
             }
             WatchCommand.ListSessions -> pushSessions()
             is WatchCommand.OpenSession -> openSession(cmd.sessionId)
@@ -569,6 +573,7 @@ class Wristbound private constructor(context: Context) {
             notifier.reply(reply.sessionId, reply.messageId, reply.title, reply.text,
                 settings.privatePreviews, reply.hasAudio, reply.silent)
         },
+        prepareWatch = { settings.openForAlerts && launchForAlert() },
     ).deliver(alert)
 
     /** Show one reply as a card on the watch. True when the watch acknowledged it. */
@@ -593,6 +598,18 @@ class Wristbound private constructor(context: Context) {
     }
 
     suspend fun openWatchApp(): Boolean = watch.startApp()
+
+    /** Start only when opted in, and await HELLO before attempting the reply. */
+    private suspend fun launchForAlert(): Boolean = launchMutex.withLock {
+        if (watchOpen) return true
+        val seen = CompletableDeferred<Unit>().also { helloSeen = it }
+        try {
+            Log.i(TAG, "starting the watchapp for an alert")
+            watch.startApp() && withTimeoutOrNull(10_000L) { seen.await() } != null
+        } finally {
+            helloSeen = null
+        }
+    }
 
     /** A watch option changed in the companion app: tell an open watchapp now. */
     fun onWatchSettingsChanged() {
