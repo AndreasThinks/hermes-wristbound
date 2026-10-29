@@ -11,9 +11,10 @@
 #define BANNER_ENABLED 1
 #endif
 
-typedef void (*BannerOpenHandler)(void);
+typedef void (*BannerHandler)(void);
 
-void banner_show(const char *title, const char *text, bool audio, BannerOpenHandler on_open);
+// on_open runs on Select; on_expire (optional) when the card fades out untouched.
+void banner_show(const char *title, const char *text, bool audio, BannerHandler on_open, BannerHandler on_expire);
 void banner_hide(void);
 bool banner_showing(void);
 void banner_deinit(void);

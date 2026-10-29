@@ -162,6 +162,8 @@ class MainActivity : AppCompatActivity() {
             note("Off by default: those apps already notify your phone."),
             switch("Background & scheduled tasks", s.alertBackground) { s.alertBackground = it },
             note("Cron jobs and automation sessions, and Hermes following up on its own background work."),
+            switch("Open Wristbound for alerts", s.openForAlerts) { s.openForAlerts = it },
+            note("Opt-in: opens Wristbound over the watchface or another app to show its own reply banner. An untouched banner returns to the watchface. If opening fails, the native notification is used instead."),
         )
         column.addView(switch("Notifications", s.notifyReplies) { on ->
             s.notifyReplies = on
