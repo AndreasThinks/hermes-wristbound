@@ -26,12 +26,9 @@ data class KeepAlive(
 /** How replies from other surfaces are checked for right now. */
 enum class Monitor {
     OFF,
-    /** The watchapp is open: the Pebble app's binding keeps the process awake, so a timer loop works. */
+    /** The watchapp is open: checks every 30 s, whatever the background setting. */
     LOOP,
-    /**
-     * Background checking with the watchapp closed: alarms wake the phone for each check, since
-     * a coroutine `delay()` stops counting while the CPU sleeps.
-     */
+    /** Background checking with the watchapp closed: checks at the chosen interval. */
     ALARMS;
 
     companion object {

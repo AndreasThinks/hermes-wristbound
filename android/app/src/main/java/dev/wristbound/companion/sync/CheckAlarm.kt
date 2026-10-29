@@ -13,7 +13,7 @@ import dev.wristbound.companion.core.Wristbound
 import kotlinx.coroutines.launch
 
 /**
- * Wakes the phone for each background check while the watchapp is closed. Alarms keep time
+ * Wakes the phone for each reply check, with the watchapp open or closed. Alarms keep time
  * through deep sleep, unlike a coroutine `delay()`, and survive the process being killed. Exact
  * alarms keep the chosen interval while the phone is awake; in deep Doze Android spaces them to
  * about one every 9 minutes (sooner with the battery-optimisation exemption).
@@ -56,7 +56,7 @@ class CheckReceiver : BroadcastReceiver() {
         val pending = goAsync()
         controller.scope.launch {
             try {
-                controller.backgroundCheck()
+                controller.scheduledCheck()
             } finally {
                 if (lock?.isHeld == true) lock.release()
                 pending.finish()
@@ -65,7 +65,7 @@ class CheckReceiver : BroadcastReceiver() {
     }
 
     private companion object {
-        // A safety cap: Wristbound.backgroundCheck gives up well before this.
+        // A safety cap: Wristbound.scheduledCheck gives up well before this.
         const val WAKE_TIMEOUT_MS = 45_000L
     }
 }

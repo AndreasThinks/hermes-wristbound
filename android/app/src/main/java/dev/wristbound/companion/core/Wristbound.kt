@@ -36,8 +36,6 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -92,7 +90,6 @@ class Wristbound private constructor(context: Context) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<ByteArray, String>>?) = size > 2
     }
     private val pollMutex = Mutex()
-    private var monitor: Job? = null
     private var mode = Monitor.OFF
     /** A reply is playing or paused on the phone, which keeps the service up. */
     @Volatile private var playing = false
@@ -610,31 +607,20 @@ class Wristbound private constructor(context: Context) {
     // -- reply monitoring -----------------------------------------------------------------------
 
     /**
-     * Replies from other surfaces (Telegram, Ringbearer, desktop) are found by polling. While the
-     * watchapp is open a timer loop runs; while it is closed, with background checking on, alarms
-     * wake the phone for each check ([CheckAlarm]), since a timer stops while the CPU sleeps.
-     * Every transition goes through here, so there is never more than one schedule, and the
-     * foreground service is kept in line with it.
+     * Replies from other surfaces (Telegram, Ringbearer, desktop) are found by polling, every 30 s
+     * while the watchapp is open and, with background checking on, at the chosen interval while it
+     * is closed. Each check is an alarm ([CheckAlarm]) that wakes the phone: a coroutine timer stops
+     * while the CPU sleeps, and the Pebble app's binding while the watchapp is open keeps the
+     * process alive but does not keep the CPU awake. Every transition goes through here, so there
+     * is never more than one schedule, and the foreground service is kept in line with it.
      */
     @Synchronized
     fun updateMonitoring() {
         val wanted = Monitor.of(settings.isConfigured, watchOpen, settings.backgroundSync)
         if (wanted != mode) {
             Log.i(TAG, "reply monitoring: $mode -> $wanted")
-            monitor?.cancel()
-            monitor = null
-            CheckAlarm.cancel(app)
-            when (wanted) {
-                Monitor.LOOP -> monitor = scope.launch {
-                    while (isActive) {
-                        pollOnce()
-                        delay(pollIntervalSeconds() * 1000L)
-                    }
-                }
-                // Just after the watchapp closed or setup changed: one check now, then alarms.
-                Monitor.ALARMS -> CheckAlarm.schedule(app, FIRST_ALARM_SECONDS)
-                Monitor.OFF -> Unit
-            }
+            // The watchapp opened or closed, or setup changed: check soon, then at the new pace.
+            if (wanted == Monitor.OFF) CheckAlarm.cancel(app) else CheckAlarm.schedule(app, FIRST_ALARM_SECONDS)
             mode = wanted
         }
         refreshService()
@@ -649,14 +635,19 @@ class Wristbound private constructor(context: Context) {
 
     private fun refreshService() = SyncService.sync(app, keepAlive())
 
-    /** One alarm-driven check while the watchapp is closed, then the next alarm. */
-    suspend fun backgroundCheck() {
+    /** One alarm-driven check, then the next alarm. */
+    suspend fun scheduledCheck() {
         // Restores the schedule and the service if Android killed the process since the last one;
         // an exact alarm is allowed to start a foreground service.
         updateMonitoring()
-        withTimeoutOrNull(BACKGROUND_CHECK_MS) { pollOnce() }
-        synchronized(this) {
-            if (mode == Monitor.ALARMS) CheckAlarm.schedule(app, settings.pollSeconds)
+        try {
+            withTimeoutOrNull(CHECK_TIMEOUT_MS) { pollOnce() }
+        } finally {
+            // Whatever went wrong in this check, the next one is always scheduled: an alarm that
+            // is not set again stops checking until the app is next opened.
+            synchronized(this) {
+                if (mode != Monitor.OFF) CheckAlarm.schedule(app, pollIntervalSeconds())
+            }
         }
     }
 
@@ -832,7 +823,7 @@ class Wristbound private constructor(context: Context) {
         private const val MAX_AUDIO_FILES = 24
         const val FOREGROUND_POLL_SECONDS = 30
         private const val FIRST_ALARM_SECONDS = 5
-        private const val BACKGROUND_CHECK_MS = 30_000L
+        private const val CHECK_TIMEOUT_MS = 30_000L
 
         @Volatile private var instance: Wristbound? = null
 

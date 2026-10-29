@@ -9,12 +9,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.text.format.DateFormat
 import androidx.core.app.Person
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import dev.wristbound.companion.R
 import dev.wristbound.companion.ui.MainActivity
+import java.util.Date
 
 /**
  * Phone notifications. The Pebble mirrors these, including their actions, so a reply can be
@@ -154,6 +156,25 @@ class Notifier(private val context: Context) {
         post(ERROR_ID, n)
     }
 
+    /**
+     * A test alert on the reply channel, to check the whole path to the Pebble: notification
+     * permission, the channel, and the Pebble app's forwarding for Wristbound. The time keeps it
+     * from being dropped as a duplicate of an earlier test.
+     */
+    fun testAlert(): Boolean {
+        val time = DateFormat.getTimeFormat(context).format(Date())
+        val n = NotificationCompat.Builder(context, CH_REPLIES)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setColor(ContextCompat.getColor(context, R.color.phosphor_signal))
+            .setContentTitle("Wristbound · test")
+            .setContentText("Test alert sent at $time. If this is on your watch, alerts reach it.")
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setAutoCancel(true)
+            .setContentIntent(openApp())
+            .build()
+        return post(TEST_ID, n)
+    }
+
     fun syncNotification(text: String): Notification = NotificationCompat.Builder(context, CH_SYNC)
         .setSmallIcon(R.drawable.ic_notification)
         .setContentTitle("Wristbound")
@@ -199,6 +220,7 @@ class Notifier(private val context: Context) {
         private const val TOOL_ID = 2
         private const val ERROR_ID = 3
         private const val REPLY_ID = 4
+        private const val TEST_ID = 5
         /** Pebble shows these as the notification's actions. */
         private val APPROVAL_LABELS = mapOf(
             "once" to "Allow once", "session" to "Allow this session", "always" to "Always allow", "deny" to "Deny",
