@@ -62,6 +62,7 @@ import dev.wristbound.companion.hermes.SignInException
 import dev.wristbound.companion.notify.Notifier
 import dev.wristbound.companion.pebble.Protocol
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.IOException
 import java.net.ConnectException
@@ -172,6 +173,8 @@ class MainActivity : AppCompatActivity() {
             s.toolActivity = if (it) ToolActivity.NOTIFY else ToolActivity.SILENT
         })
         column.addView(switch("Hide reply text in notifications", s.privatePreviews) { s.privatePreviews = it })
+        column.addView(note("To test the path to the watch, press the button below and lock the phone: a test alert is posted about 10 s later. If it does not reach the watch, check that Wristbound is enabled in the Pebble app's notification settings, and whether it is set to skip notifications while the phone is in use."))
+        column.addView(button("Send a test alert", primary = false) { sendTestAlert() })
 
         column.addView(heading("Checking for replies"))
         monitoring = note("")
@@ -522,6 +525,27 @@ class MainActivity : AppCompatActivity() {
             .recoverCatching { startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
     }
 
+    /** A test alert 10 s from now, so there is time to lock the phone before it is posted. */
+    private fun sendTestAlert() {
+        if (!Notifier(this).canPost()) {
+            status.text = "Notifications are blocked, so the test alert cannot be sent."
+            return
+        }
+        status.text = "Lock the phone now: a test alert follows in about 10 seconds."
+        val app = applicationContext
+        val lock = getSystemService(PowerManager::class.java)
+            ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "wristbound:test")
+            ?.apply { acquire(TEST_DELAY_MS + 5_000L) }
+        controller.scope.launch {
+            try {
+                delay(TEST_DELAY_MS)
+                Notifier(app).testAlert()
+            } finally {
+                if (lock?.isHeld == true) lock.release()
+            }
+        }
+    }
+
     /** Ask again, or open the app's notification settings once Android stops asking. */
     private fun fixNotifications() {
         if (Build.VERSION.SDK_INT >= 33 && shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
@@ -626,6 +650,7 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val TAG = "WristboundSetup"
+        const val TEST_DELAY_MS = 10_000L
         /** In [Protocol.QuickLaunch] order. */
         val QUICK_LAUNCH_CHOICES = listOf("Home", "Dictate a new session", "Recent audio", "Play latest audio", "Last session")
     }
