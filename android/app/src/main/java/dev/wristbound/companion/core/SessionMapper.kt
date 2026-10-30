@@ -87,9 +87,19 @@ object SessionMapper {
 
     /**
      * One final answer at [index] in a message list, with the audio Hermes made for it.
-     * [background] marks an answer to a turn Hermes started itself (see [HermesMessage.opensBackgroundTurn]).
+     *
+     * [background] marks an answer to a turn Hermes started itself that no person asked for, or
+     * that cannot be traced to one (see [origin]). [originRow] is the stable id of the person's
+     * message the answer ultimately responds to: the user row of its own turn, or, for a finished
+     * delegation or background process, the user row of the turn that started that work.
      */
-    data class Reply(val index: Int, val message: HermesMessage, val audio: List<String>, val background: Boolean = false) {
+    data class Reply(
+        val index: Int,
+        val message: HermesMessage,
+        val audio: List<String>,
+        val background: Boolean = false,
+        val originRow: String? = null,
+    ) {
         val id: String get() = message.stableId
         val hasAudio: Boolean get() = audio.isNotEmpty()
     }
@@ -106,20 +116,75 @@ object SessionMapper {
      *   media (`audio_<12 hex>`), for when that user row is outside the fetched window.
      * - A media-only assistant row is not a separate answer: its audio joins the answer before
      *   it in the same turn, which is how audio that arrives after the text is matched.
+     * - A turn Hermes opened to report finished work answers the person whose turn started that
+     *   work (see [Origins]); only a turn nobody asked for, or one whose dispatch is out of view,
+     *   is [Reply.background].
      */
     fun replies(messages: List<HermesMessage>): List<Reply> {
         val userFiles = messages.filter { it.role == "user" }
             .flatMap { AUDIO_PATH.findAll(it.text.replace("\\/", "/")).map { m -> m.value.substringAfterLast('/') } }
             .toSet()
         val out = mutableListOf<Reply>()
+        val origins = Origins(messages)
         var start = 0
         while (start < messages.size) {
             var end = start
             while (end < messages.size && messages[end].role != "user") end++
-            if (end > start) out += turnReplies(messages, start, end, userFiles, messages.getOrNull(start - 1)?.opensBackgroundTurn == true)
+            if (end > start) {
+                // A window that starts mid-turn has no opener in view: as before, not background.
+                val origin = if (start == 0) Origin.Unseen else origins.of(start - 1)
+                out += turnReplies(messages, start, end, userFiles, origin)
+            }
             start = end + 1
         }
         return out
+    }
+
+    /**
+     * Whether some turn in [messages] reports finished work whose dispatch is not in view, so a
+     * longer history could decide whether a person asked for it.
+     */
+    fun hasUntracedWork(messages: List<HermesMessage>): Boolean {
+        val origins = Origins(messages)
+        return messages.indices.any { messages[it].opensBackgroundTurn && origins.of(it) == Origin.Untraced }
+    }
+
+    /** Who a turn answers, found from its opening user row. */
+    private sealed interface Origin {
+        /** A person's message, by stable id. */
+        data class Person(val row: String) : Origin
+        /** Hermes started it and no person's turn asked for the work. */
+        data object Hermes : Origin
+        /** Finished work whose dispatch is outside the fetched rows. */
+        data object Untraced : Origin
+        /** The fetched rows start inside the turn. */
+        data object Unseen : Origin
+    }
+
+    /**
+     * Traces turns Hermes opened back to the turn that asked for the work, memoised per row.
+     *
+     * A completion notice names its delegation or process id ([HermesMessage.completedWork]);
+     * the earliest tool result in view that names the same id is where that work was started
+     * (`delegate_task` returns `delegation_id`, a background `terminal` call returns
+     * `session_id`). The work belongs to whoever opened that turn, which may itself be another
+     * completion, so the chain is followed back to a person, or to Hermes when it ends at a
+     * notice that reports no work. Each step moves to an earlier row, so it always ends.
+     */
+    private class Origins(private val messages: List<HermesMessage>) {
+        private val memo = HashMap<Int, Origin>()
+
+        fun of(opener: Int): Origin = memo.getOrPut(opener) {
+            val row = messages[opener]
+            if (!row.opensBackgroundTurn) return@getOrPut Origin.Person(row.stableId)
+            val ids = row.completedWork.map { Regex("""(?<![\w-])${Regex.escape(it)}(?![\w-])""") }
+            if (ids.isEmpty()) return@getOrPut Origin.Hermes
+            val dispatch = (0 until opener).firstOrNull { i ->
+                messages[i].role == "tool" && messages[i].text.let { text -> ids.any { it.containsMatchIn(text) } }
+            } ?: return@getOrPut Origin.Untraced
+            val asker = (dispatch - 1 downTo 0).firstOrNull { messages[it].role == "user" } ?: return@getOrPut Origin.Untraced
+            of(asker)
+        }
     }
 
     /** [replies] that belong to the latest turn: after the last user row. */
@@ -128,7 +193,9 @@ object SessionMapper {
         return replies(messages).filter { it.index > lastUser }
     }
 
-    private fun turnReplies(messages: List<HermesMessage>, start: Int, end: Int, userFiles: Set<String>, background: Boolean): List<Reply> {
+    private fun turnReplies(messages: List<HermesMessage>, start: Int, end: Int, userFiles: Set<String>, origin: Origin): List<Reply> {
+        val background = origin == Origin.Hermes || origin == Origin.Untraced
+        val originRow = (origin as? Origin.Person)?.row
         val finals = (start until end).filter { messages[it].isFinalAssistantText }
         val answers = finals.filter { Text.forSpeech(Text.forWatch(messages[it].text)).isNotBlank() }
             .ifEmpty { listOfNotNull(finals.lastOrNull()) }
@@ -143,7 +210,7 @@ object SessionMapper {
                 .distinct()
             // Typed attachments are already associated by Hermes; never borrow a sibling's.
             val attached = messages[index].audio_attachments.sortedBy { it.part }.map { "attachment:${it.id}" }
-            Reply(index, messages[index], (audio + attached).distinct(), background)
+            Reply(index, messages[index], (audio + attached).distinct(), background, originRow)
         }
     }
 

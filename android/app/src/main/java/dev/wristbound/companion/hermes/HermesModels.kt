@@ -104,6 +104,8 @@ data class HermesMessage(
     val finish_reason: String? = null,
     /** How Hermes shows a row; set on rows Hermes wrote itself, such as a finished background task's notice. */
     val display_kind: String? = null,
+    /** Hermes' display data for that row; a delegation's completion names its `delegation_id` here. */
+    val display_metadata: JsonElement? = null,
     val audio_attachments: List<AudioAttachment> = emptyList(),
 ) {
     /**
@@ -112,6 +114,21 @@ data class HermesMessage(
      */
     val opensBackgroundTurn: Boolean
         get() = role == "user" && display_kind in BACKGROUND_TURN_KINDS
+
+    /**
+     * For a row that [opensBackgroundTurn], the ids of the work it reports finished: the
+     * delegation (`deleg_…`, from `display_metadata` or the notice's header) or background process
+     * (`proc_…`). The tool result that started that work names the same id, which is how
+     * `SessionMapper` traces the completion back to the turn that asked for it. Empty for any
+     * other row, and for notices that report no work (a heartbeat tick, a gateway notice).
+     */
+    val completedWork: Set<String>
+        get() {
+            if (!opensBackgroundTurn) return emptySet()
+            val fromMetadata = ((display_metadata as? JsonObject)?.get("delegation_id") as? JsonPrimitive)?.contentOrNull
+            return (listOfNotNull(fromMetadata?.takeIf { it.isNotBlank() }) +
+                WORK_NOTICES.flatMap { re -> re.findAll(text).map { it.groupValues[1] } }).toSet()
+        }
 
     /** Hermes message ids are integers today; keep them opaque strings on our side. */
     val stableId: String
@@ -212,6 +229,18 @@ data class NativeTokens(
     val expires_at: Double = 0.0,
     val provider: String = "",
     val user_id: String = "",
+)
+
+/**
+ * Headers Hermes writes into a completion notice's content (`tools/process_registry_notifications.py`
+ * `format_process_notification`): a delegation finished or one of its tasks failed, a subagent's
+ * process names its delegation, and a background process exited or matched its watch pattern.
+ * A heartbeat (`[Background process … heartbeat`) is progress, not a result, and is left out.
+ */
+private val WORK_NOTICES = listOf(
+    Regex("""\[ASYNC DELEGATION [A-Z ]+ — ([\w-]+)"""),
+    Regex("""Started by subagent \S+ of delegation ([\w-]+)"""),
+    Regex("""\[IMPORTANT: Background process (proc_[\w-]+) """),
 )
 
 /** `display_kind`s of the user rows Hermes writes to start a turn of its own. */

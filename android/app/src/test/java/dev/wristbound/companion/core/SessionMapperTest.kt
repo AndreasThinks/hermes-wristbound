@@ -202,4 +202,48 @@ class SessionMapperTest {
         assertEquals(null, SessionMapper.replyRefusal(sessions[0], messagingReplies = true))
         assertEquals(null, SessionMapper.replyRefusal(null, messagingReplies = true))
     }
+
+    @Test
+    fun completionNoticesNameTheWorkTheyReport() {
+        fun notice(content: String, kind: String = "internal_notification", meta: String = "") =
+            msg("""{"role":"user","display_kind":"$kind",$meta"content":${kotlinx.serialization.json.JsonPrimitive(content)}}""").completedWork
+        assertEquals(setOf("deleg_1a2b3c4d"), notice("x", "async_delegation_complete", """"display_metadata":{"delegation_id":"deleg_1a2b3c4d"},"""))
+        assertEquals(setOf("deleg_1a2b3c4d"), notice("[ASYNC DELEGATION COMPLETE — deleg_1a2b3c4d]\nA background subagent…"))
+        assertEquals(setOf("deleg_5"), notice("[ASYNC DELEGATION BATCH COMPLETE — deleg_5]"))
+        assertEquals(setOf("deleg_5"), notice("[ASYNC DELEGATION TASK FAILED — deleg_5, task 2/3]"))
+        assertEquals(setOf("proc_0123456789ab"), notice("[IMPORTANT: Background process proc_0123456789ab exited normally (exit code 0).", "process_complete"))
+        assertEquals(
+            setOf("proc_0123456789ab", "deleg_5"),
+            notice("[IMPORTANT: Background process proc_0123456789ab exited (exit code 1).\nStarted by subagent sa-1 of delegation deleg_5. Task: \"x\""),
+        )
+        // A heartbeat is progress, not a result; other notices report no work.
+        assertEquals(emptySet<String>(), notice("[Background process proc_0123456789ab heartbeat #2 — still running after 5m]"))
+        assertEquals(emptySet<String>(), notice("[Background process finished]", "process_complete"))
+        // Only rows that open a background turn count.
+        assertEquals(emptySet<String>(), msg("""{"role":"user","content":"[ASYNC DELEGATION COMPLETE — deleg_1]"}""").completedWork)
+    }
+
+    @Test
+    fun aCompletionWhoseDispatchIsOutOfViewIsBackgroundUntilMoreHistoryIsFetched() {
+        val full = listOf(
+            msg("""{"id":1,"role":"user","content":"Make the Broadsheet changes","timestamp":1.0}"""),
+            msg("""{"id":2,"role":"assistant","content":"","tool_calls":[{"id":"c"}],"timestamp":2.0}"""),
+            msg("""{"id":3,"role":"tool","tool_name":"delegate_task","content":"{\"status\": \"dispatched\", \"delegation_id\": \"deleg_1a2b3c4d\"}","timestamp":2.0}"""),
+            msg("""{"id":4,"role":"assistant","content":"On it.","timestamp":3.0}"""),
+            msg("""{"id":5,"role":"user","display_kind":"async_delegation_complete","display_metadata":{"delegation_id":"deleg_1a2b3c4d"},"content":"Subagent Task Completed","timestamp":9.0}"""),
+            msg("""{"id":6,"role":"assistant","content":"Fixed and live.","timestamp":10.0}"""),
+        )
+        val window = full.drop(4)
+        assertTrue(SessionMapper.hasUntracedWork(window))
+        assertEquals(listOf(true), SessionMapper.replies(window).map { it.background })
+        assertFalse(SessionMapper.hasUntracedWork(full))
+        val replies = SessionMapper.replies(full)
+        assertEquals(listOf(false, false), replies.map { it.background })
+        assertEquals(listOf("1", "1"), replies.map { it.originRow })
+        // An id inside a longer id is not the same work.
+        val other = full.toMutableList().apply {
+            set(2, msg("""{"id":3,"role":"tool","tool_name":"delegate_task","content":"{\"delegation_id\": \"deleg_1a2b3c4d9\"}","timestamp":2.0}"""))
+        }
+        assertTrue(SessionMapper.hasUntracedWork(other))
+    }
 }

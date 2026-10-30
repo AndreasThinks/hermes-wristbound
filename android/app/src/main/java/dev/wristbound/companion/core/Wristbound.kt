@@ -702,7 +702,8 @@ class Wristbound private constructor(context: Context) {
         }
         settings.lastCheckAt = System.currentTimeMillis()
         val moved = alerts.poll(sessions, busy = { activeTurns.containsKey(it) }) { id ->
-            api.recentMessages(id, 20).also {
+            // Finished work whose dispatch is further back: fetch enough history to see who asked for it.
+            api.recentMessages(id, 20).let { if (SessionMapper.hasUntracedWork(it)) api.recentMessages(id, TRACE_HISTORY) else it }.also {
                 rememberReplies(it)
                 noteAudio(sessionsById[id], it)
             }
@@ -841,6 +842,8 @@ class Wristbound private constructor(context: Context) {
         private const val DUPLICATE_WINDOW_MS = 15_000L
         private const val NEW_SESSION_TARGET = "\u0000new"
         private const val MAX_AUDIO_FILES = 24
+        /** Rows fetched to trace finished work back to the turn that started it; the dashboard serves up to 500. */
+        private const val TRACE_HISTORY = 200
         const val FOREGROUND_POLL_SECONDS = 30
         private const val FIRST_ALARM_SECONDS = 5
         private const val CHECK_TIMEOUT_MS = 30_000L
