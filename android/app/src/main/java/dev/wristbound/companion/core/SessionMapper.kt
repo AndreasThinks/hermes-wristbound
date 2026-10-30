@@ -88,10 +88,12 @@ object SessionMapper {
     /**
      * One final answer at [index] in a message list, with the audio Hermes made for it.
      *
-     * [background] marks an answer to a turn Hermes started itself that no person asked for, or
-     * that cannot be traced to one (see [origin]). [originRow] is the stable id of the person's
-     * message the answer ultimately responds to: the user row of its own turn, or, for a finished
-     * delegation or background process, the user row of the turn that started that work.
+     * [background] marks an answer to a turn Hermes opened with a notice that reports no finished
+     * work (a heartbeat tick, a gateway check-in). An answer about finished work (a delegation or
+     * background process reporting back) is part of the conversation, like the desktop app's
+     * "Response ready". [originRow] is the stable id of the person's message the answer responds
+     * to: the user row of its own turn or, for finished work, of the turn that started that work
+     * when it is in view.
      */
     data class Reply(
         val index: Int,
@@ -116,9 +118,9 @@ object SessionMapper {
      *   media (`audio_<12 hex>`), for when that user row is outside the fetched window.
      * - A media-only assistant row is not a separate answer: its audio joins the answer before
      *   it in the same turn, which is how audio that arrives after the text is matched.
-     * - A turn Hermes opened to report finished work answers the person whose turn started that
-     *   work (see [Origins]); only a turn nobody asked for, or one whose dispatch is out of view,
-     *   is [Reply.background].
+     * - A turn Hermes opened to report finished work is a reply in the conversation; only a turn
+     *   opened by a notice that reports no work is [Reply.background]. Finished work is traced
+     *   back to the person who asked for it where possible ([Origins]), for [Reply.originRow].
      */
     fun replies(messages: List<HermesMessage>): List<Reply> {
         val userFiles = messages.filter { it.role == "user" }
@@ -140,36 +142,28 @@ object SessionMapper {
         return out
     }
 
-    /**
-     * Whether some turn in [messages] reports finished work whose dispatch is not in view, so a
-     * longer history could decide whether a person asked for it.
-     */
-    fun hasUntracedWork(messages: List<HermesMessage>): Boolean {
-        val origins = Origins(messages)
-        return messages.indices.any { messages[it].opensBackgroundTurn && origins.of(it) == Origin.Untraced }
-    }
-
     /** Who a turn answers, found from its opening user row. */
     private sealed interface Origin {
         /** A person's message, by stable id. */
         data class Person(val row: String) : Origin
-        /** Hermes started it and no person's turn asked for the work. */
+        /** Hermes reporting finished work, started by [asker]'s message when that is in view. */
+        data class Work(val asker: String?) : Origin
+        /** A notice from Hermes that reports no finished work. */
         data object Hermes : Origin
-        /** Finished work whose dispatch is outside the fetched rows. */
-        data object Untraced : Origin
         /** The fetched rows start inside the turn. */
         data object Unseen : Origin
     }
 
     /**
-     * Traces turns Hermes opened back to the turn that asked for the work, memoised per row.
+     * Classifies turn openers and traces finished work back to the person who asked for it,
+     * memoised per row.
      *
      * A completion notice names its delegation or process id ([HermesMessage.completedWork]);
      * the earliest tool result in view that names the same id is where that work was started
      * (`delegate_task` returns `delegation_id`, a background `terminal` call returns
      * `session_id`). The work belongs to whoever opened that turn, which may itself be another
-     * completion, so the chain is followed back to a person, or to Hermes when it ends at a
-     * notice that reports no work. Each step moves to an earlier row, so it always ends.
+     * completion, so the chain is followed back. Each step moves to an earlier row, so it always
+     * ends. Tracing only names the asker: a completion it cannot trace is still finished work.
      */
     private class Origins(private val messages: List<HermesMessage>) {
         private val memo = HashMap<Int, Origin>()
@@ -181,9 +175,15 @@ object SessionMapper {
             if (ids.isEmpty()) return@getOrPut Origin.Hermes
             val dispatch = (0 until opener).firstOrNull { i ->
                 messages[i].role == "tool" && messages[i].text.let { text -> ids.any { it.containsMatchIn(text) } }
-            } ?: return@getOrPut Origin.Untraced
-            val asker = (dispatch - 1 downTo 0).firstOrNull { messages[it].role == "user" } ?: return@getOrPut Origin.Untraced
-            of(asker)
+            }
+            val asker = dispatch?.let { d -> (d - 1 downTo 0).firstOrNull { messages[it].role == "user" } }
+            Origin.Work(asker?.let { askerOf(of(it)) })
+        }
+
+        private fun askerOf(origin: Origin): String? = when (origin) {
+            is Origin.Person -> origin.row
+            is Origin.Work -> origin.asker
+            else -> null
         }
     }
 
@@ -194,8 +194,12 @@ object SessionMapper {
     }
 
     private fun turnReplies(messages: List<HermesMessage>, start: Int, end: Int, userFiles: Set<String>, origin: Origin): List<Reply> {
-        val background = origin == Origin.Hermes || origin == Origin.Untraced
-        val originRow = (origin as? Origin.Person)?.row
+        val background = origin == Origin.Hermes
+        val originRow = when (origin) {
+            is Origin.Person -> origin.row
+            is Origin.Work -> origin.asker
+            else -> null
+        }
         val finals = (start until end).filter { messages[it].isFinalAssistantText }
         val answers = finals.filter { Text.forSpeech(Text.forWatch(messages[it].text)).isNotBlank() }
             .ifEmpty { listOfNotNull(finals.lastOrNull()) }

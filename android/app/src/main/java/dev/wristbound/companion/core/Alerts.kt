@@ -14,9 +14,9 @@ enum class ReplyKind {
     /** A chat on a messaging platform, which notifies the phone itself. */
     MESSAGING,
     /**
-     * A scheduled or automation session, or a turn Hermes started itself that no person asked
-     * for. Finished work a person asked for (a delegation, a background process) is not
-     * background: it alerts like a reply in the conversation that asked.
+     * A scheduled or automation session, or a turn Hermes opened with a notice that reports no
+     * finished work (a heartbeat, a gateway check-in). Finished work reporting back in a chat (a
+     * delegation, a background process) is not background: it alerts like that chat's replies.
      */
     BACKGROUND,
 }

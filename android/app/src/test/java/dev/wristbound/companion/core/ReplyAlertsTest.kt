@@ -537,7 +537,7 @@ class ReplyAlertsTest {
     }
 
     @Test
-    fun unsolicitedFollowUpsStayBackground() = runTest {
+    fun noticesThatReportNoWorkStayBackgroundButFinishedWorkIsAChatReply() = runTest {
         session("desk", "desktop", 10.0)
         poll()
         append(
@@ -546,15 +546,30 @@ class ReplyAlertsTest {
             // Hermes woke itself with no work to report…
             row(5, 20.0, "user", "[IMPORTANT: Gateway restarted; checking in.]", kind = "internal_notification"),
             answer(6, 21.0, "Back online."),
-            // …started work in that turn, which no person asked for…
+            // …started work in that turn on its own; its result is still a reply in this chat, as on the desktop…
             *delegate(7, 22.0, "deleg_aaaabbbb").toTypedArray(), answer(9, 23.0, "Tidying up."),
             delegationDone(10, 30.0, "deleg_aaaabbbb"), answer(11, 31.0, "Tidied."),
-            // …and a completion that names no work.
-            row(12, 40.0, "user", "[Background process finished]", kind = "process_complete"), answer(13, 41.0, "Noted."),
+            // …and a heartbeat tick, which reports progress, not a result.
+            row(12, 40.0, "user", "[Background process proc_0123456789ab heartbeat #2 — still running after 5m]", kind = "internal_notification"),
+            answer(13, 41.0, "Still going."),
         )
         poll()
-        assertEquals(listOf("4"), alerts.map { it.messageId })
-        assertEquals(listOf("BUZZED · CHAT REPLY") + List(4) { "SILENT · BACKGROUND OFF" }, log.map { it.label })
+        assertEquals(listOf("4", "11"), alerts.map { it.messageId })
+        assertEquals(
+            listOf("BUZZED · CHAT REPLY", "SILENT · BACKGROUND OFF", "SILENT · BACKGROUND OFF", "BUZZED · CHAT REPLY", "SILENT · BACKGROUND OFF"),
+            log.map { it.label },
+        )
+    }
+
+    @Test
+    fun finishedWorkWhoseRequestIsOutOfViewStillAlertsAsAChatReply() = runTest {
+        // Quiet: the request may have come from the watch, but nothing in view says so; the chat switch decides.
+        session("desk", "desktop", 10.0)
+        poll()
+        append("desk", 30.0, delegationDone(7, 25.0, "deleg_0ff5c4e3"), answer(8, 30.0, "Fixed and live."))
+        poll()
+        assertEquals(listOf("8"), alerts.map { it.messageId })
+        assertEquals("BUZZED · CHAT REPLY", log.single().label)
     }
 
     @Test

@@ -224,7 +224,7 @@ class SessionMapperTest {
     }
 
     @Test
-    fun aCompletionWhoseDispatchIsOutOfViewIsBackgroundUntilMoreHistoryIsFetched() {
+    fun finishedWorkIsTracedToWhoAskedWhenItsDispatchIsInView() {
         val full = listOf(
             msg("""{"id":1,"role":"user","content":"Make the Broadsheet changes","timestamp":1.0}"""),
             msg("""{"id":2,"role":"assistant","content":"","tool_calls":[{"id":"c"}],"timestamp":2.0}"""),
@@ -233,17 +233,17 @@ class SessionMapperTest {
             msg("""{"id":5,"role":"user","display_kind":"async_delegation_complete","display_metadata":{"delegation_id":"deleg_1a2b3c4d"},"content":"Subagent Task Completed","timestamp":9.0}"""),
             msg("""{"id":6,"role":"assistant","content":"Fixed and live.","timestamp":10.0}"""),
         )
-        val window = full.drop(4)
-        assertTrue(SessionMapper.hasUntracedWork(window))
-        assertEquals(listOf(true), SessionMapper.replies(window).map { it.background })
-        assertFalse(SessionMapper.hasUntracedWork(full))
         val replies = SessionMapper.replies(full)
         assertEquals(listOf(false, false), replies.map { it.background })
         assertEquals(listOf("1", "1"), replies.map { it.originRow })
+        // Out of view: still finished work, not background, but the asker is unknown.
+        val window = SessionMapper.replies(full.drop(4)).single()
+        assertFalse(window.background)
+        assertEquals(null, window.originRow)
         // An id inside a longer id is not the same work.
         val other = full.toMutableList().apply {
             set(2, msg("""{"id":3,"role":"tool","tool_name":"delegate_task","content":"{\"delegation_id\": \"deleg_1a2b3c4d9\"}","timestamp":2.0}"""))
         }
-        assertTrue(SessionMapper.hasUntracedWork(other))
+        assertEquals(null, SessionMapper.replies(other).last().originRow)
     }
 }
