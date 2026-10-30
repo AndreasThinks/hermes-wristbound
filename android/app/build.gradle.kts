@@ -11,8 +11,8 @@ android {
         applicationId = "dev.wristbound.companion"
         minSdk = 29
         targetSdk = 36
-        versionCode = 12
-        versionName = "0.6.6"
+        versionCode = 13
+        versionName = "0.6.7"
     }
 
     buildTypes {
