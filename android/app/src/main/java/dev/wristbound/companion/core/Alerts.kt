@@ -13,7 +13,11 @@ enum class ReplyKind {
     CHAT,
     /** A chat on a messaging platform, which notifies the phone itself. */
     MESSAGING,
-    /** A scheduled or automation session, or a turn Hermes started itself. */
+    /**
+     * A scheduled or automation session, or a turn Hermes opened with a notice that reports no
+     * finished work (a heartbeat, a gateway check-in). Finished work reporting back in a chat (a
+     * delegation, a background process) is not background: it alerts like that chat's replies.
+     */
     BACKGROUND,
 }
 
@@ -45,7 +49,10 @@ data class AlertPolicy(
     val audioAlerts: Boolean get() = enabled && audio
 
     companion object {
-        /** The kind of [reply] in [session]; [watchTurn] when it answers a turn sent from the watch. */
+        /**
+         * The kind of [reply] in [session]; [watchTurn] when it answers a turn sent from the
+         * watch, directly or through work that turn started.
+         */
         fun kindOf(session: HermesSession, reply: SessionMapper.Reply, watchTurn: Boolean): ReplyKind = when {
             session.isAutomation || reply.background -> ReplyKind.BACKGROUND
             watchTurn -> ReplyKind.WATCH_TURN
@@ -115,6 +122,8 @@ class ReplyAlerts(
      * Only answers after the last user row count, so older history never alerts here.
      */
     suspend fun turnFinished(session: HermesSession, messages: List<HermesMessage>) {
+        // Remember the message the watch sent, so work it started alerts as a watch reply when it finishes.
+        messages.lastOrNull { it.role == "user" && !it.opensBackgroundTurn }?.let { store.markAlerted(WATCH_ROW_PREFIX + it.stableId) }
         for (reply in SessionMapper.latestTurnReplies(messages)) consider(session, reply, floor = null, watchTurn = true)
     }
 
@@ -170,7 +179,8 @@ class ReplyAlerts(
         val latestAudio = reply.message.audio_attachments.maxOfOrNull { it.created_at } ?: 0.0
         if (floor != null && !store.isAlerted(reply.id) &&
             maxOf(reply.message.timestamp ?: Double.MAX_VALUE, latestAudio) <= floor + EPSILON) return true
-        val kind = AlertPolicy.kindOf(session, reply, watchTurn)
+        val fromWatch = watchTurn || reply.originRow?.let { store.isAlerted(WATCH_ROW_PREFIX + it) } == true
+        val kind = AlertPolicy.kindOf(session, reply, fromWatch)
         val decision = decide(session, reply, policy(), kind) ?: return true
         fun note(outcome: AlertRecord.Outcome) {
             if (!decision.alert.silent) log(record(session, reply, kind, decision.alert.hasAudio, outcome))
@@ -232,6 +242,8 @@ class ReplyAlerts(
     companion object {
         const val AUDIO_PREFIX = "audio:"
         const val DELIVERED_PREFIX = "delivered:"
+        /** A user row sent from the watch, by stable id. */
+        const val WATCH_ROW_PREFIX = "watch-row:"
         const val MAX_ATTEMPTS = 5
         private const val EPSILON = 0.001
         private const val MAX_CURSORS = 200
