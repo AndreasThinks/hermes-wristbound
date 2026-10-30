@@ -83,8 +83,8 @@ class Settings(context: Context) : BoundCredentialStore {
         get() = prefs.getBoolean("show_automation", false)
         set(v) = prefs.edit().putBoolean("show_automation", v).apply()
 
-    /** Allow sending from the watch into Telegram sessions. Off keeps them read and play only. */
-    var allowTelegramReplies: Boolean
+    /** Allow sending from the watch into messaging chats. Off keeps them read and play only. */
+    var allowMessagingReplies: Boolean
         get() = prefs.getBoolean("allow_telegram_replies", true)
         set(v) = prefs.edit().putBoolean("allow_telegram_replies", v).apply()
 
@@ -129,6 +129,44 @@ class Settings(context: Context) : BoundCredentialStore {
     var toolActivity: ToolActivity
         get() = enumValueOrDefault(prefs.getString("tool_activity", null), ToolActivity.HIDDEN)
         set(v) = prefs.edit().putString("tool_activity", v.name).apply()
+
+    /** All five alert switches and the master switch, as one value. */
+    var alertPolicy: AlertPolicy
+        get() = AlertPolicy(
+            enabled = notifyReplies,
+            audio = alertAudio,
+            watchTurns = alertWatchTurns,
+            chats = alertChats,
+            messagingText = alertMessagingText,
+            background = alertBackground,
+        )
+        set(p) {
+            notifyReplies = p.enabled
+            alertAudio = p.audio
+            alertWatchTurns = p.watchTurns
+            alertChats = p.chats
+            alertMessagingText = p.messagingText
+            alertBackground = p.background
+        }
+
+    var alertStyle: AlertStyle
+        get() = if (openForAlerts) AlertStyle.BANNER else AlertStyle.NOTIFICATION
+        set(v) { openForAlerts = v == AlertStyle.BANNER }
+
+    /** Background checking and its interval, as one choice. */
+    var replySpeed: ReplySpeed
+        get() = ReplySpeed.of(backgroundSync, pollSeconds)
+        set(v) {
+            backgroundSync = v != ReplySpeed.WATCH_ONLY
+            v.seconds?.let { pollSeconds = it }
+        }
+
+    var messagingChats: MessagingChats
+        get() = MessagingChats.of(showMessaging, allowMessagingReplies)
+        set(v) {
+            showMessaging = v.listed
+            allowMessagingReplies = v.replies
+        }
 
     /** Hide reply text in phone notifications (and so in the Pebble's mirrored copy). */
     var privatePreviews: Boolean

@@ -10,7 +10,7 @@ import java.io.File
 
 /**
  * Small, bounded on-device state: unread baselines, alerted reply ids and polling checkpoints
- * (for deduplication and catch-up), sessions Hermes refused to continue, and a cache of what the
+ * (for deduplication and catch-up), recent alert decisions, sessions Hermes refused to continue, and a cache of what the
  * watch last showed. Everything lives in app-private storage, excluded from backups.
  */
 class LocalState(context: Context) : AlertStore {
@@ -65,6 +65,18 @@ class LocalState(context: Context) : AlertStore {
             if (v == null) edit.remove("poll_cursors") else edit.putString("poll_cursors", json.encodeToString(PollCursors.serializer(), v))
             edit.commit()
         }
+
+    /** Recent alert decisions, newest first. */
+    @Synchronized
+    fun recentAlerts(): List<AlertRecord> = prefs.getString("alert_log", null)?.let {
+        runCatching { json.decodeFromString(ListSerializer(AlertRecord.serializer()), it) }.getOrNull()
+    }.orEmpty()
+
+    @Synchronized
+    fun recordAlert(record: AlertRecord) {
+        val list = (listOf(record) + recentAlerts()).take(AlertRecord.MAX)
+        prefs.edit().putString("alert_log", json.encodeToString(ListSerializer(AlertRecord.serializer()), list)).apply()
+    }
 
     @Synchronized
     fun readOnly(): Set<String> = readList("read_only").toSet()

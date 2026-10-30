@@ -7,4 +7,7 @@
     <color name="phosphor_note">#FFC4C4CC</color>
     <color name="phosphor_meta">#FF9A9AA6</color>
     <color name="phosphor_rule">#FF2E2E36</color>
+    <!-- Panels, and amber for a broken link that needs the user. -->
+    <color name="phosphor_panel">#FF0B0B10</color>
+    <color name="phosphor_warn">#FFFFB547</color>
 </resources>

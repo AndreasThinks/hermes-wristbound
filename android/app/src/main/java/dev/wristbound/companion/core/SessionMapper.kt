@@ -12,7 +12,7 @@ object SessionMapper {
      * Sessions visible on the watch: pinned first, then most recent. Messaging chats show with
      * [includeMessaging], and scheduled and automation sessions only with [includeAutomation].
      * These control visibility only; alerts are decided separately by [AlertPolicy]. With
-     * [telegramReplies] off, Telegram sessions are marked read-only: still readable and
+     * [messagingReplies] off, messaging chats are marked read-only: still readable and
      * playable, but not sendable.
      */
     fun visibleSessions(
@@ -21,7 +21,7 @@ object SessionMapper {
         lastSeen: Map<String, Double>,
         readOnly: Set<String>,
         active: Set<String>,
-        telegramReplies: Boolean = true,
+        messagingReplies: Boolean = true,
         includeAutomation: Boolean = false,
     ): List<WatchSession> = sessions
         .asSequence()
@@ -35,7 +35,7 @@ object SessionMapper {
             val seen = lastSeen[s.id]
             if (seen != null && s.activity > seen + 0.001) flags = flags or Protocol.SessionFlag.UNREAD
             if (s.isTelegram) flags = flags or Protocol.SessionFlag.TELEGRAM
-            if (s.id in readOnly || (s.isTelegram && !telegramReplies)) flags = flags or Protocol.SessionFlag.READ_ONLY
+            if (s.id in readOnly || (s.isMessaging && !messagingReplies)) flags = flags or Protocol.SessionFlag.READ_ONLY
             if (s.id in active) flags = flags or Protocol.SessionFlag.ACTIVE
             WatchSession(s.id, Text.forWatch(s.displayTitle), flags)
         }
@@ -43,12 +43,13 @@ object SessionMapper {
 
     /**
      * Why a reply into [session] is refused on the phone, or null if it may be sent. With
-     * [telegramReplies] off an unknown session is refused too: it might be a Telegram one.
+     * [messagingReplies] off an unknown session is refused too: it might be a messaging chat.
      */
-    fun replyRefusal(session: HermesSession?, telegramReplies: Boolean): String? = when {
-        telegramReplies -> null
+    fun replyRefusal(session: HermesSession?, messagingReplies: Boolean): String? = when {
+        messagingReplies -> null
         session == null -> "Refresh sessions first"
         session.isTelegram -> "Reply in Telegram"
+        session.isMessaging -> "Reply in the chat app"
         else -> null
     }
 

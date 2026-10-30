@@ -186,17 +186,20 @@ class SessionMapperTest {
     }
 
     @Test
-    fun telegramReadOnlyModeKeepsOtherSessionsWritable() {
+    fun messagingReadOnlyModeKeepsOtherSessionsWritable() {
+        val discord = HermesSession("dc", source = "discord", title = "dc", last_active = 1.0)
         val shown = SessionMapper.visibleSessions(
-            sessions, true, emptyMap(), emptySet(), emptySet(), telegramReplies = false,
+            sessions + discord, true, emptyMap(), emptySet(), emptySet(), messagingReplies = false,
         ).associateBy { it.id }
         assertEquals(Protocol.SessionFlag.TELEGRAM or Protocol.SessionFlag.READ_ONLY, shown.getValue("tg").flags)
+        assertEquals(Protocol.SessionFlag.READ_ONLY, shown.getValue("dc").flags)
         assertEquals(0, shown.getValue("api").flags)
+        assertEquals("Reply in the chat app", SessionMapper.replyRefusal(discord, messagingReplies = false))
 
-        assertEquals("Reply in Telegram", SessionMapper.replyRefusal(sessions[0], telegramReplies = false))
-        assertEquals(null, SessionMapper.replyRefusal(sessions[1], telegramReplies = false))
-        assertEquals("Refresh sessions first", SessionMapper.replyRefusal(null, telegramReplies = false))
-        assertEquals(null, SessionMapper.replyRefusal(sessions[0], telegramReplies = true))
-        assertEquals(null, SessionMapper.replyRefusal(null, telegramReplies = true))
+        assertEquals("Reply in Telegram", SessionMapper.replyRefusal(sessions[0], messagingReplies = false))
+        assertEquals(null, SessionMapper.replyRefusal(sessions[1], messagingReplies = false))
+        assertEquals("Refresh sessions first", SessionMapper.replyRefusal(null, messagingReplies = false))
+        assertEquals(null, SessionMapper.replyRefusal(sessions[0], messagingReplies = true))
+        assertEquals(null, SessionMapper.replyRefusal(null, messagingReplies = true))
     }
 }
