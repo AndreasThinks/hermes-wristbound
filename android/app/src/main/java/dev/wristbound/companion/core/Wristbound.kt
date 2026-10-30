@@ -194,7 +194,7 @@ class Wristbound private constructor(context: Context) {
                 if (quick == null) cmd.quickLaunch?.let { settings.quickLaunch = it }
                 else watch.send(WatchCodec.config(quick))
                 watch.send(WatchCodec.audioRoute(playback.hasPrivateOutput()))
-                pushSessions()
+                pushSessions(cachedFirst = true)
                 // The saved list only: the watch asks for a refresh when Recent audio is opened.
                 sendAudioPages(state.loadAudio())
                 pendingReply?.let { (sid, mid) ->
@@ -205,7 +205,7 @@ class Wristbound private constructor(context: Context) {
                 approvals.values.forEach { showApproval(it) }
                 helloSeen?.complete(Unit)
             }
-            WatchCommand.ListSessions -> pushSessions()
+            WatchCommand.ListSessions -> pushSessions(cachedFirst = true)
             is WatchCommand.OpenSession -> openSession(cmd.sessionId)
             is WatchCommand.Send -> submit(cmd.sessionId, cmd.text)
             is WatchCommand.NewSession -> newSession(cmd.text)
@@ -245,13 +245,19 @@ class Wristbound private constructor(context: Context) {
         return sessions
     }
 
-    suspend fun pushSessions() {
+    /**
+     * Send the session list. With [cachedFirst] (the watch asked for it) the saved list goes
+     * first, so the watch shows it at once instead of waiting on Hermes; Hermes' list follows
+     * only if it differs, so an unchanged list is not sent over Bluetooth twice.
+     */
+    suspend fun pushSessions(cachedFirst: Boolean = false) {
         val api = api()
         if (api == null) {
             watch.send(WatchCodec.status(Protocol.Conn.NOT_CONFIGURED, "Set up phone app"))
             sendSessionPages(emptyList())
             return
         }
+        val shown = if (cachedFirst) state.loadSessions()?.sessions?.also { sendSessionPages(it) } else null
         try {
             val visible = SessionMapper.visibleSessions(
                 fetchSessions(api, forList = true), settings.showMessaging, state.lastSeen(), state.readOnly(), activeTurns.keys,
@@ -259,18 +265,18 @@ class Wristbound private constructor(context: Context) {
             )
             state.saveSessions(visible)
             watch.send(WatchCodec.status(Protocol.Conn.OK, ""))
-            sendSessionPages(visible)
+            if (visible != shown) sendSessionPages(visible)
         } catch (e: HermesHttpException) {
             watch.send(WatchCodec.status(if (e.isAuth) Protocol.Conn.AUTH_ERROR else Protocol.Conn.ERROR, e.message.orEmpty()))
-            sendSessionPages(state.loadSessions()?.sessions.orEmpty())
+            if (shown == null) sendSessionPages(state.loadSessions()?.sessions.orEmpty())
         } catch (e: HermesProtocolException) {
             Log.w(TAG, "unreadable session list", e)
             watch.send(WatchCodec.status(Protocol.Conn.ERROR, "Hermes sent bad data"))
-            sendSessionPages(state.loadSessions()?.sessions.orEmpty())
+            if (shown == null) sendSessionPages(state.loadSessions()?.sessions.orEmpty())
         } catch (e: IOException) {
             val cached = state.loadSessions()
             watch.send(WatchCodec.status(Protocol.Conn.OFFLINE, if (cached != null) "Offline - cached" else "Hermes offline"))
-            sendSessionPages(cached?.sessions.orEmpty())
+            if (shown == null) sendSessionPages(cached?.sessions.orEmpty())
         }
     }
 
@@ -283,10 +289,15 @@ class Wristbound private constructor(context: Context) {
     private suspend fun openSession(sessionId: String) {
         state.openSessionId = sessionId
         sessionsById[sessionId]?.let { state.markSeen(sessionId, it.activity) }
-        pushMessages(sessionId)
+        pushMessages(sessionId, cachedFirst = true)
     }
 
-    private suspend fun pushMessages(sessionId: String) {
+    /**
+     * Send a session's recent history. With [cachedFirst] (the watch opened the session) the
+     * saved copy goes first, as for [pushSessions], and Hermes' copy follows only if it differs.
+     */
+    private suspend fun pushMessages(sessionId: String, cachedFirst: Boolean = false) {
+        val shown = if (cachedFirst) state.loadMessages(sessionId)?.messages?.also { sendMessagePages(sessionId, it) } else null
         val api = api()
         val title = sessionsById[sessionId]?.displayTitle.orEmpty()
         val messages: List<WatchMessage> = try {
@@ -303,6 +314,10 @@ class Wristbound private constructor(context: Context) {
             watch.send(WatchCodec.status(Protocol.Conn.OFFLINE, "Offline - cached"))
             state.loadMessages(sessionId)?.messages.orEmpty()
         }
+        if (messages != shown) sendMessagePages(sessionId, messages)
+    }
+
+    private suspend fun sendMessagePages(sessionId: String, messages: List<WatchMessage>) {
         val pages = if (messages.isEmpty()) listOf(WatchCodec.messagePage(sessionId, 0, 0, null, textBudget))
         else messages.mapIndexed { i, m -> WatchCodec.messagePage(sessionId, i, messages.size, m, textBudget) }
         watch.sendAll(pages)

@@ -96,6 +96,7 @@ Answered in code, still to confirm on devices:
 - Hermes API coverage and authentication: the dashboard and gateway socket cover sessions, history, submission, events and audio ([HERMES_API.md](HERMES_API.md)).
 - Continuing Telegram-origin sessions: `session.resume` on the gateway, as the desktop app does; replies can be turned off per user setting.
 - Filters versus alerts: the session filters (messaging chats, scheduled and automation sessions) change what the watch lists only. Alerts are decided per reply by `AlertPolicy` from its kind: audio (its own switch, any session), a watch turn, a local chat, messaging text, or background (an automation source, or a turn opened by a user row Hermes wrote itself, `display_kind` `internal_notification`, `process_complete` or `async_delegation_complete`). Polling always looks at every session, so a scheduled voice reply can alert while its session stays off the list.
+- Opening the watchapp, the Sessions list or a conversation shows the phone's saved copy at once, then asks Hermes and resends only what changed. The watch itself keeps nothing between launches (Pebble storage is a few KB), so the phone's cache is what makes reopening fast.
 - Audio labelling: replies with Hermes audio are labelled as audio in the alert and are the only ones that offer Play; text replies are never read aloud.
 
 Still open:
