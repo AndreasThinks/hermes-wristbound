@@ -96,7 +96,7 @@ class Wristbound private constructor(context: Context) {
     private var mode = Monitor.OFF
     /** A reply is playing or paused on the phone, which keeps the service up. */
     @Volatile private var playing = false
-    private val alerts = ReplyAlerts(state, ::alertPolicy) { deliverAlert(it) }
+    private val alerts = ReplyAlerts(state, ::alertPolicy, log = ::recordAlert) { deliverAlert(it) }
     private val audioDir = File(app.cacheDir, "audio").apply { mkdirs() }
 
     private data class Reply(val text: String, val audio: List<String>)
@@ -255,7 +255,7 @@ class Wristbound private constructor(context: Context) {
         try {
             val visible = SessionMapper.visibleSessions(
                 fetchSessions(api, forList = true), settings.showMessaging, state.lastSeen(), state.readOnly(), activeTurns.keys,
-                settings.allowTelegramReplies, settings.showAutomation,
+                settings.allowMessagingReplies, settings.showAutomation,
             )
             state.saveSessions(visible)
             watch.send(WatchCodec.status(Protocol.Conn.OK, ""))
@@ -399,11 +399,11 @@ class Wristbound private constructor(context: Context) {
 
     private suspend fun submit(sessionId: String, text: String) {
         val api = api() ?: return submitState(sessionId, Protocol.Submit.FAILED, "Set up phone app")
-        if (!settings.allowTelegramReplies) {
+        if (!settings.allowMessagingReplies) {
             // Enforced here, not only on the watch: an unknown session is looked up first and
             // refused if it still cannot be checked.
             if (sessionsById[sessionId] == null) runCatching { fetchSessions(api) }
-            SessionMapper.replyRefusal(sessionsById[sessionId], telegramReplies = false)?.let {
+            SessionMapper.replyRefusal(sessionsById[sessionId], messagingReplies = false)?.let {
                 return submitState(sessionId, Protocol.Submit.READ_ONLY, it)
             }
         }
@@ -544,14 +544,24 @@ class Wristbound private constructor(context: Context) {
         alerts.turnFinished(session, raw)
     }
 
-    private fun alertPolicy() = AlertPolicy(
-        enabled = settings.notifyReplies,
-        audio = settings.alertAudio,
-        watchTurns = settings.alertWatchTurns,
-        chats = settings.alertChats,
-        messagingText = settings.alertMessagingText,
-        background = settings.alertBackground,
-    )
+    private fun alertPolicy() = settings.alertPolicy
+
+    /** Keep the decision for the setup screen's recent alerts; no reply text when previews are private. */
+    private fun recordAlert(record: AlertRecord) {
+        state.recordAlert(if (settings.privatePreviews) record.copy(preview = "") else record)
+        _alertLog.value = state.recentAlerts()
+    }
+
+    private val _alertLog = MutableStateFlow(state.recentAlerts())
+
+    /** Recent alert decisions, newest first, for the setup screen. */
+    val alertLog: StateFlow<List<AlertRecord>> = _alertLog
+
+    /** Forget cached conversations and alert bookkeeping, including the recent alerts list. */
+    fun clearCache() {
+        state.clearCache()
+        _alertLog.value = emptyList()
+    }
 
     /**
      * Show one decided alert: on the open watchapp, otherwise as a phone notification (which
@@ -677,13 +687,6 @@ class Wristbound private constructor(context: Context) {
     fun pollIntervalSeconds(): Int =
         if (watchOpen) minOf(settings.pollSeconds, FOREGROUND_POLL_SECONDS) else settings.pollSeconds
 
-    /** What reply monitoring is doing, for the setup screen. */
-    fun monitoringSummary(): String = when {
-        !settings.isConfigured -> "Off until you sign in."
-        watchOpen -> "Checking every ${pollIntervalSeconds()} s while the watchapp is open."
-        settings.backgroundSync -> "Checking every ${settings.pollSeconds} s in the background."
-        else -> "Paused: checks run while the watchapp is open, or always with background checking on."
-    }
 
     /**
      * One background check for replies that arrived through other paths (Telegram, Ringbearer,

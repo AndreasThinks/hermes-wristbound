@@ -100,6 +100,9 @@ data class PollCursors(val since: Double, val sessions: Map<String, Double>)
 class ReplyAlerts(
     private val store: AlertStore,
     private val policy: () -> AlertPolicy,
+    /** Every first decision, for the setup screen's list of recent alerts. */
+    private val log: (AlertRecord) -> Unit = {},
+    private val now: () -> Long = System::currentTimeMillis,
     private val deliver: suspend (ReplyAlert) -> Boolean,
 ) {
     /** Failed deliveries per reply id, in memory: a restart gets a fresh set of attempts. */
@@ -167,14 +170,22 @@ class ReplyAlerts(
         val latestAudio = reply.message.audio_attachments.maxOfOrNull { it.created_at } ?: 0.0
         if (floor != null && !store.isAlerted(reply.id) &&
             maxOf(reply.message.timestamp ?: Double.MAX_VALUE, latestAudio) <= floor + EPSILON) return true
-        val decision = decide(session, reply, policy(), AlertPolicy.kindOf(session, reply, watchTurn)) ?: return true
+        val kind = AlertPolicy.kindOf(session, reply, watchTurn)
+        val decision = decide(session, reply, policy(), kind) ?: return true
+        fun note(outcome: AlertRecord.Outcome) {
+            if (!decision.alert.silent) log(record(session, reply, kind, decision.alert.hasAudio, outcome))
+        }
         if (deliver(decision.alert)) {
             store.markAlerted(DELIVERED_PREFIX + reply.id)
             synchronized(failures) { failures.remove(reply.id) }
+            note(AlertRecord.Outcome.ALERTED)
             return true
         }
         val attempts = synchronized(failures) { (failures[reply.id] ?: 0).plus(1).also { failures[reply.id] = it } }
-        if (attempts >= MAX_ATTEMPTS) return true
+        if (attempts >= MAX_ATTEMPTS) {
+            note(AlertRecord.Outcome.FAILED)
+            return true
+        }
         decision.marked.forEach(store::unmarkAlerted)
         return false
     }
@@ -194,6 +205,7 @@ class ReplyAlerts(
             if (reply.hasAudio) store.markAlerted(audioKey)
             val marked = if (reply.hasAudio) listOf(reply.id, audioKey) else listOf(reply.id)
             val due = if (reply.hasAudio) policy.audioAlerts else policy.textAlerts(kind)
+            if (!due) logSilent(session, reply, policy, kind)
             return if (due) alert(silent = false, marked) else null
         }
         // Seen before: only newly arrived audio matters.
@@ -202,9 +214,16 @@ class ReplyAlerts(
             // The text already alerted: add Play to it without alerting again.
             policy.enabled && store.isAlerted(DELIVERED_PREFIX + reply.id) -> alert(silent = true, listOf(audioKey))
             policy.audioAlerts -> alert(silent = false, listOf(audioKey))
-            else -> null
+            else -> null.also { logSilent(session, reply, policy, kind) }
         }
     }
+
+    private fun logSilent(session: HermesSession, reply: SessionMapper.Reply, policy: AlertPolicy, kind: ReplyKind) =
+        log(record(session, reply, kind, reply.hasAudio, AlertRecord.Outcome.SILENT, AlertRecord.silentReason(policy, kind, reply.hasAudio)))
+
+    private fun record(
+        session: HermesSession, reply: SessionMapper.Reply, kind: ReplyKind, audio: Boolean, outcome: AlertRecord.Outcome, reason: String = "",
+    ) = AlertRecord(now(), session.displayTitle, AlertRecord.preview(reply.message.text), kind, audio, outcome, reason)
 
     private fun bounded(map: Map<String, Double>): Map<String, Double> =
         if (map.size <= MAX_CURSORS) map

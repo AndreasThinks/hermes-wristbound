@@ -31,7 +31,8 @@ class ReplyAlertsTest {
     /** Deliveries that fail before one succeeds; failed attempts are recorded in [attempts]. */
     private var deliveryFailures = 0
     private val attempts = mutableListOf<String>()
-    private fun dispatcher(s: AlertStore = store) = ReplyAlerts(s, { policy }) {
+    private val log = mutableListOf<AlertRecord>()
+    private fun dispatcher(s: AlertStore = store) = ReplyAlerts(s, { policy }, log = { log += it }, now = { 1_000L }) {
         attempts += it.messageId
         if (deliveryFailures > 0) { deliveryFailures--; false } else { alerts += it; true }
     }
@@ -400,5 +401,42 @@ class ReplyAlertsTest {
         append("chat", 30.0, answer(3, 30.0, "MEDIA:/cache/tts_late.ogg"))
         poll()
         assertEquals(listOf(false, true), alerts.map { it.silent })
+    }
+
+    @Test
+    fun logRecordsWhyEachReplyBuzzedOrStayedSilent() = runTest {
+        session("tg", "telegram", 10.0)
+        session("api", "api_server", 10.0)
+        poll()
+        append("tg", 20.0, user(3, 15.0), answer(4, 20.0, "Booked for 8."))
+        append("api", 20.0, user(5, 15.0), answer(6, 20.0, "Pushed the fix."))
+        poll()
+        val byTitle = log.associateBy { it.title }
+        assertEquals("SILENT · MESSAGING OFF", byTitle.getValue("tg").label)
+        assertEquals("Booked for 8.", byTitle.getValue("tg").preview)
+        assertEquals("BUZZED · CHAT REPLY", byTitle.getValue("api").label)
+        assertEquals(1_000L, byTitle.getValue("api").at)
+
+        // The audio turns up later: a new decision, and this time it buzzes.
+        append("tg", 30.0, msg("""{"id":7,"role":"assistant","timestamp":30.0,"content":"MEDIA:/home/h/.hermes/cache/audio/tts_7.ogg"}"""))
+        poll()
+        assertEquals(3, log.size)
+        assertEquals("BUZZED · VOICE", log.last().label)
+        // Polling again records nothing new.
+        poll()
+        assertEquals(3, log.size)
+    }
+
+    @Test
+    fun logRecordsAnAlertOnlyOnceItIsDeliveredOrGivenUp() = runTest {
+        session("api", "api_server", 10.0)
+        poll()
+        append("api", 20.0, user(3, 15.0), answer(4, 20.0))
+        deliveryFailures = ReplyAlerts.MAX_ATTEMPTS
+        val d = dispatcher()
+        repeat(ReplyAlerts.MAX_ATTEMPTS - 1) { poll(d) }
+        assertEquals(emptyList<AlertRecord>(), log)
+        poll(d)
+        assertEquals(listOf(AlertRecord.Outcome.FAILED), log.map { it.outcome })
     }
 }

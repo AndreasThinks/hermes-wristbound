@@ -75,7 +75,7 @@ Source validation: [action filtering](https://github.com/coredevices/mobileapp/b
 
 ## Telegram replies
 
-"Allow replies to Telegram sessions" (on by default) can be turned off to keep Telegram sessions read-only from the watch. They stay listed, readable and playable. The phone refuses a send into a Telegram session (or into a session it cannot identify) with "Reply in Telegram", and the watch does not open the reply screen there. Nothing changes on the Hermes side.
+*On the watch → Messaging chats* can be set to *Read only* (default *Read and reply*) to keep messaging sessions (Telegram, Discord, Slack…) read-only from the watch. They stay listed, readable and playable. The phone refuses a send into one (or into a session it cannot identify) with "Reply in Telegram" or "Reply in the chat app", and the watch does not open the reply screen there. Nothing changes on the Hermes side.
 
 ## Turn safety
 
