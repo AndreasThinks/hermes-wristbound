@@ -609,6 +609,19 @@ class ReplyAlertsTest {
     }
 
     @Test
+    fun workAskedForFromTheWatchInATelegramChatAlertsAsAWatchReply() = runTest {
+        // The defaults: messaging text off, watch replies on.
+        session("tg", "telegram", 10.0, user(1, 9.0, "Started on Telegram"), answer(2, 10.0))
+        poll()
+        append("tg", 20.0, user(3, 15.0, "Now fix the Broadsheet"), *delegate(4, 16.0, "deleg_7e1e9a40").toTypedArray(), answer(6, 20.0, "On it."))
+        dispatcher().turnFinished(sessions.getValue("tg"), transcripts.getValue("tg"))
+        append("tg", 40.0, delegationDone(7, 30.0, "deleg_7e1e9a40", kind = "internal_notification"), answer(8, 40.0, "Fixed and live."))
+        poll()
+        assertEquals(listOf("6", "8"), alerts.map { it.messageId })
+        assertEquals(listOf("BUZZED · WATCH REPLY", "BUZZED · WATCH REPLY"), log.map { it.label })
+    }
+
+    @Test
     fun requestedWorkInAMessagingChatFollowsTheMessagingRules() = runTest {
         session("tg", "telegram", 10.0)
         poll()
