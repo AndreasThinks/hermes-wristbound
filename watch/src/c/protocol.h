@@ -107,6 +107,7 @@ typedef enum {
 #define MESSAGE_FLAG_HAS_AUDIO (1 << 1)
 #define MESSAGE_FLAG_PENDING   (1 << 2)
 #define MESSAGE_FLAG_REQUESTED (1 << 3) // a REPLY the watch asked for, not a new alert
+#define MESSAGE_FLAG_OPEN      (1 << 4) // a REPLY to open at once (the phone's "Open in Wristbound")
 
 // Recent audio flags
 #define AUDIO_FLAG_NEW      (1 << 0)

@@ -1215,7 +1215,7 @@ static void prv_open_conv_with(const char *session_id, const char *message_id, c
   prv_open_conv(false);
   strncpy(s_conv_target, message_id, MESSAGE_ID_LEN - 1);
   // Shown at once; the history replaces it when it arrives.
-  model_set_message(0, message_id, ROLE_ASSISTANT, flags & ~MESSAGE_FLAG_REQUESTED, text);
+  model_set_message(0, message_id, ROLE_ASSISTANT, flags & ~(MESSAGE_FLAG_REQUESTED | MESSAGE_FLAG_OPEN), text);
   prv_conv_layout();
 }
 
@@ -1758,6 +1758,17 @@ void ui_reply_received(const char *session_id, const char *message_id,
       prv_msg_set_body(text, s_msg_flags);
     }
 #endif
+    return;
+  }
+  if (flags & MESSAGE_FLAG_OPEN) {
+    // "Open in Wristbound" on the phone: the user already saw the notification and asked for
+    // this reply, so open its conversation straight away, quietly, and keep the app open.
+#if defined(BANNER_ENABLED)
+    s_launched_for_alert = false;
+#endif
+    if (!(prv_conv_on_top() && strcmp(session_id, g_model.open_session_id) == 0)) {
+      prv_open_conv_with(session_id, message_id, title[0] ? title : "Hermes", flags, text);
+    }
     return;
   }
   if (flags & MESSAGE_FLAG_HAS_AUDIO) {

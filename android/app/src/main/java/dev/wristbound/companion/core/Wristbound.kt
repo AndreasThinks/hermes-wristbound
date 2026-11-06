@@ -63,7 +63,7 @@ class Wristbound private constructor(context: Context) {
         Log.e(TAG, "unhandled error in companion work", e)
     })
     private val watch = WatchLink(app)
-    private val notifier = Notifier(app)
+    val notifier = Notifier(app)
     private val playback = PlaybackController(app) { id, s, detail -> onPlaybackState(id, s, detail) }
 
     @Volatile var watchOpen = false
@@ -75,7 +75,9 @@ class Wristbound private constructor(context: Context) {
     /** An approval Hermes is waiting on, in a turn this phone runs. */
     private class OpenApproval(val sessionId: String, val title: String, val request: ApprovalRequest, val answer: (String) -> Boolean)
     private val approvals = ConcurrentHashMap<String, OpenApproval>()
-    @Volatile private var pendingReply: Pair<String, String>? = null
+    /** A reply "Open in Wristbound" asked for, shown once the watchapp says hello. */
+    private class PendingOpen(val sessionId: String, val messageId: String, val fallbackText: String?, val at: Long)
+    @Volatile private var pendingReply: PendingOpen? = null
     @Volatile private var helloSeen: CompletableDeferred<Unit>? = null
     private val launchMutex = Mutex()
     @Volatile private var lastSend: Triple<String, String, Long>? = null
@@ -194,13 +196,17 @@ class Wristbound private constructor(context: Context) {
                 if (quick == null) cmd.quickLaunch?.let { settings.quickLaunch = it }
                 else watch.send(WatchCodec.config(quick))
                 watch.send(WatchCodec.audioRoute(playback.hasPrivateOutput()))
+                // Before the session list: that waits on Hermes, and the user is looking at the
+                // watch for this reply now. A stale request (the launch failed long ago) is dropped.
+                pendingReply?.let { open ->
+                    pendingReply = null
+                    if (System.currentTimeMillis() - open.at < PENDING_OPEN_MS) {
+                        sendReplyToWatch(open.sessionId, open.messageId, open.fallbackText, open = true)
+                    }
+                }
                 pushSessions(cachedFirst = true)
                 // The saved list only: the watch asks for a refresh when Recent audio is opened.
                 sendAudioPages(state.loadAudio())
-                pendingReply?.let { (sid, mid) ->
-                    pendingReply = null
-                    sendReplyToWatch(sid, mid)
-                }
                 // A question still waiting: the watch takes it over from the notification.
                 approvals.values.forEach { showApproval(it) }
                 helloSeen?.complete(Unit)
@@ -413,18 +419,21 @@ class Wristbound private constructor(context: Context) {
     }
 
     private suspend fun submit(sessionId: String, text: String) {
-        val api = api() ?: return submitState(sessionId, Protocol.Submit.FAILED, "Set up phone app")
+        // Refusals use problem(): with the watchapp closed (a reply from a notification) they
+        // become a notification, so the message is never dropped without a word.
+        val title = sessionsById[sessionId]?.displayTitle ?: "Hermes"
+        val api = api() ?: return problem(sessionId, title, Protocol.Submit.FAILED, "Set up phone app")
         if (!settings.allowMessagingReplies) {
             // Enforced here, not only on the watch: an unknown session is looked up first and
             // refused if it still cannot be checked.
             if (sessionsById[sessionId] == null) runCatching { fetchSessions(api) }
             SessionMapper.replyRefusal(sessionsById[sessionId], messagingReplies = false)?.let {
-                return submitState(sessionId, Protocol.Submit.READ_ONLY, it)
+                return problem(sessionId, title, Protocol.Submit.READ_ONLY, it)
             }
         }
         if (isDuplicate(sessionId, text)) return
         if (activeTurns.containsKey(sessionId)) {
-            return submitState(sessionId, Protocol.Submit.FAILED, "Hermes still working here")
+            return problem(sessionId, title, Protocol.Submit.FAILED, "Hermes still working here")
         }
         startTurn(sessionId, text)
     }
@@ -595,15 +604,17 @@ class Wristbound private constructor(context: Context) {
         },
         closeWatch = { setWatchOpen(false) },
         postNative = { reply ->
+            val canReply = SessionMapper.replyRefusal(sessionsById[reply.sessionId], settings.allowMessagingReplies) == null
             notifier.reply(reply.sessionId, reply.messageId, reply.title, reply.text,
-                settings.privatePreviews, reply.hasAudio, reply.silent)
+                settings.privatePreviews, reply.hasAudio, reply.silent, canReply)
         },
         prepareWatch = { settings.openForAlerts && launchForAlert() },
     ).deliver(alert)
 
     /** Show one reply as a card on the watch. True when the watch acknowledged it. */
     private suspend fun sendReplyToWatch(
-        sessionId: String, messageId: String, fallbackText: String? = null, hasAudio: Boolean? = null, requested: Boolean = false,
+        sessionId: String, messageId: String, fallbackText: String? = null, hasAudio: Boolean? = null,
+        requested: Boolean = false, open: Boolean = false,
     ): Boolean {
         val reply = replyFor(sessionId, messageId)
         val text = reply?.text ?: fallbackText?.let(Text::forWatch) ?: return false
@@ -611,15 +622,30 @@ class Wristbound private constructor(context: Context) {
         val title = sessionsById[sessionId]?.displayTitle ?: "Hermes"
         var flags = if (audio) Protocol.MessageFlag.HAS_AUDIO else 0
         if (requested) flags = flags or Protocol.MessageFlag.REQUESTED
+        if (open) flags = flags or Protocol.MessageFlag.OPEN
         return watch.send(WatchCodec.reply(sessionId, title, WatchMessage(messageId, Protocol.Role.ASSISTANT, flags, text), textBudget))
     }
 
-    /** Notification action "Read on watch": open the watchapp, then show this reply once it says hello. */
-    suspend fun openReplyOnWatch(sessionId: String, messageId: String) {
-        if (watchOpen && sendReplyToWatch(sessionId, messageId)) return
-        pendingReply = sessionId to messageId
+    /**
+     * Notification action "Open in Wristbound": open the watchapp at this reply's conversation.
+     * [fallbackText] is the notification's own text, used when the companion no longer holds the
+     * reply (its process was restarted since) and Hermes cannot be reached to fetch it again.
+     */
+    suspend fun openReplyOnWatch(sessionId: String, messageId: String, fallbackText: String? = null) {
         state.openSessionId = sessionId
-        watch.startApp()
+        if (watchOpen && sendReplyToWatch(sessionId, messageId, fallbackText, open = true)) return
+        pendingReply = PendingOpen(sessionId, messageId, fallbackText, System.currentTimeMillis())
+        if (!watch.startApp()) Log.w(TAG, "could not start the watchapp for Open in Wristbound")
+    }
+
+    /**
+     * Notification action "Reply": text typed, dictated or picked on the Pebble goes to that
+     * session as the next message. Hermes' answer comes back as a new notification.
+     */
+    suspend fun replyFromNotification(sessionId: String, text: String) {
+        val message = text.trim()
+        if (message.isEmpty()) return
+        submit(sessionId, message)
     }
 
     suspend fun openWatchApp(): Boolean = watch.startApp()
@@ -854,6 +880,8 @@ class Wristbound private constructor(context: Context) {
     companion object {
         private const val TAG = "Wristbound"
         private const val DUPLICATE_WINDOW_MS = 15_000L
+        /** How long an Open in Wristbound waits for the watchapp to start before it is dropped. */
+        private const val PENDING_OPEN_MS = 60_000L
         private const val NEW_SESSION_TARGET = "\u0000new"
         private const val MAX_AUDIO_FILES = 24
         const val FOREGROUND_POLL_SECONDS = 30

@@ -57,7 +57,7 @@ Keys are numbered by the Pebble SDK from the order of `messageKeys` in `watch/pa
 | 1 | SESSION | Index, Total, SessionId, Title, Flags. Total 0 means an empty list. |
 | 2 | MESSAGE | SessionId, Index, Total, MessageId, Role, Flags, Text. Oldest first, as the conversation reads. A watch that keeps fewer rows than Total keeps the newest. Pages overwrite rows in place and the last page trims the rest, so a reload never empties the screen. |
 | 3 | STATUS | State (0 ok, 1 offline, 2 stale, 3 not configured, 4 auth error, 5 error), Detail |
-| 4 | REPLY | SessionId, MessageId, Title, Text, Flags. A new final reply; the watch vibrates. If that session's conversation is on screen it simply shows there; otherwise a banner with the start of the reply covers the lower part of the screen, and Select opens the conversation at that reply (aplite opens the conversation directly). With flag 8 (*requested*) it answers OPEN_REPLY instead: no vibration, and it only fills in the card already showing that message. |
+| 4 | REPLY | SessionId, MessageId, Title, Text, Flags. A new final reply; the watch vibrates. If that session's conversation is on screen it simply shows there; otherwise a banner with the start of the reply covers the lower part of the screen, and Select opens the conversation at that reply (aplite opens the conversation directly). With flag 8 (*requested*) it answers OPEN_REPLY instead: no vibration, and it only fills in the card already showing that message. With flag 16 (*open*) the user pressed Open in Wristbound on the phone notification: no vibration and no banner, the conversation opens at that reply and the app stays open. |
 | 5 | PLAYBACK | MessageId, State (0 idle, 1 playing, 2 paused, 3 needs speaker, 4 error, 5 done), Detail |
 | 6 | SUBMIT | SessionId, State (1 queued, 2 working, 3 completed, 4 failed, 5 uncertain, 6 read-only, 7 cancelled), Detail |
 | 7 | SESSION_OPENED | SessionId, Title, Flags. Sent after NEW_SESSION created a session. |
@@ -69,7 +69,7 @@ Keys are numbered by the Pebble SDK from the order of `messageKeys` in `watch/pa
 | 13 | CONFIG | State (Quick launch: 0 home, 1 dictate a new session, 2 recent audio, 3 play latest audio, 4 last session). Watch options are set in the companion app. Sent after HELLO once the phone has a choice saved, and when it changes; the watch stores it. A phone with nothing saved adopts the watch's value from HELLO. |
 | 14 | APPROVAL | SessionId, MessageId (Hermes' request id), Title (session), Text (what Hermes wants to do, ≤ 480 bytes), Flags (the answers offered, as bits 1 << choice; deny is always offered), State (0 open, 1 closed: answered elsewhere, timed out, or the turn ended). Sent only to a watch whose HELLO set Flags 1; otherwise the phone posts a notification with the answers as actions. |
 
-Session flags: 1 unread, 2 Telegram origin, 4 Hermes refused to continue it (for example a Kanban worker transcript), 8 Hermes is working. Message flags: 1 truncated (rest on phone), 2 Hermes generated audio for this reply, 4 pending, 8 requested (REPLY only).
+Session flags: 1 unread, 2 Telegram origin, 4 Hermes refused to continue it (for example a Kanban worker transcript), 8 Hermes is working. Message flags: 1 truncated (rest on phone), 2 Hermes generated audio for this reply, 4 pending, 8 requested (REPLY only), 16 open (REPLY only).
 
 ## Rules
 
