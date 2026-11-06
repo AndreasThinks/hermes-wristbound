@@ -9,7 +9,7 @@ class ReplyNoticeTest {
         assertEquals("Wristbound · Weather", n.title)
         assertEquals("Audio reply available\nSunny", n.body)
         assertEquals("Wristbound", n.sender)
-        assertEquals(listOf("Play audio", "Play on phone speaker", "Open in Wristbound"), n.actions.map { it.label })
+        assertEquals(listOf("Open in Wristbound", "Play audio", "Play on phone speaker"), n.actions.map { it.label })
         assertTrue(n.actions.all { !it.showsUserInterface })
     }
 
@@ -18,7 +18,7 @@ class ReplyNoticeTest {
         assertEquals("Wristbound", hidden.title)
         assertEquals("Audio reply available", hidden.body)
         assertEquals("Wristbound", hidden.sender)
-        assertEquals("Play audio", hidden.actions.first().label)
+        assertEquals(listOf("Open in Wristbound", "Play audio", "Play on phone speaker"), hidden.actions.map { it.label })
     }
 
     @Test fun textOnlyPreviewDoesNotAdvertiseAudioOrOfferPlayback() {

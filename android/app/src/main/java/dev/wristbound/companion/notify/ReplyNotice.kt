@@ -21,12 +21,14 @@ data class ReplyNotice(val key: String, val title: String, val body: String, val
             val conversation = if (private) "" else title.trim()
             val heading = if (conversation.isBlank() || conversation == "Wristbound") "Wristbound"
                 else "Wristbound · $conversation"
+            // Opening the reply in the watchapp comes first: that is where it can be answered,
+            // and the Pebble lists actions in this order.
             val actions = buildList {
+                add(Action(ACTION_OPEN_ON_WATCH, "Open in Wristbound"))
                 if (audio) {
                     add(Action(ACTION_PLAY, "Play audio"))
                     add(Action(ACTION_PLAY_SPEAKER, "Play on phone speaker"))
                 }
-                add(Action(ACTION_OPEN_ON_WATCH, "Open in Wristbound"))
             }
             return ReplyNotice("${sessionId.length}:$sessionId$messageId", heading, body, actions)
         }
