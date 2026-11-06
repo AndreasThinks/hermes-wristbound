@@ -137,6 +137,8 @@ object Protocol {
         const val PENDING = 4
         /** A REPLY the watch asked for (OPEN_REPLY): show it quietly, it is not a new alert. */
         const val REQUESTED = 8
+        /** A REPLY the user asked to open ("Open in Wristbound"): open its conversation at once. */
+        const val OPEN = 16
     }
 
     /** Watch speaker PCM formats (the SDK's SpeakerPcmFormat). */

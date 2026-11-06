@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.text.format.DateFormat
 import androidx.core.app.Person
+import androidx.core.app.RemoteInput
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -66,8 +67,11 @@ class Notifier(private val context: Context) {
      * One reply, keyed by its message id. [silent] refreshes a reply that already alerted (its
      * audio arrived later) without alerting again. Nothing plays until an action is pressed.
      */
-    fun reply(sessionId: String, messageId: String, title: String, text: String, private: Boolean, hasAudio: Boolean, silent: Boolean): Boolean {
-        val notice = ReplyNotice.create(sessionId, messageId, title, text, private, hasAudio)
+    fun reply(
+        sessionId: String, messageId: String, title: String, text: String, private: Boolean, hasAudio: Boolean, silent: Boolean,
+        canReply: Boolean = true,
+    ): Boolean {
+        val notice = ReplyNotice.create(sessionId, messageId, title, text, private, hasAudio, canReply)
         val sender = Person.Builder().setName(notice.sender).setKey("hermes").setBot(true).build()
         val style = NotificationCompat.MessagingStyle(Person.Builder().setName("You").build())
             .setConversationTitle(notice.title)
@@ -86,8 +90,21 @@ class Notifier(private val context: Context) {
             .setAutoCancel(true)
             .setContentIntent(openApp())
         for (item in notice.actions) {
-            builder.addAction(NotificationCompat.Action.Builder(0, item.label, action(item.action, sessionId, messageId))
-                .setShowsUserInterface(item.showsUserInterface).build())
+            // Open in Wristbound carries the reply text, for when the companion has been
+            // restarted since and Hermes cannot be reached to fetch it again.
+            val fallback = if (item.action == ReplyNotice.ACTION_OPEN_ON_WATCH && !private) text.take(FALLBACK_CHARS) else null
+            val b = NotificationCompat.Action.Builder(0, item.label, action(item.action, sessionId, messageId, fallback = fallback, mutable = item.textInput))
+                .setShowsUserInterface(item.showsUserInterface)
+            if (item.textInput) {
+                b.addRemoteInput(RemoteInput.Builder(ReplyNotice.KEY_REPLY_TEXT)
+                    .setLabel("Reply to Hermes")
+                    .setChoices(ReplyNotice.CANNED_REPLIES.toTypedArray())
+                    .setAllowFreeFormInput(true)
+                    .build())
+                    .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
+                    .setAllowGeneratedReplies(false)
+            }
+            builder.addAction(b.build())
         }
         if (!canPost()) return false
         // Tag + fixed ID avoids hash collisions and keeps updates on the original native item.
@@ -196,7 +213,17 @@ class Notifier(private val context: Context) {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 
-    private fun action(action: String, sessionId: String, messageId: String, choice: String? = null): PendingIntent {
+    /** Remove one reply's notification: answered from the Pebble, it has done its job. */
+    fun clearReply(sessionId: String, messageId: String) = manager.cancel(ReplyNotice.keyFor(sessionId, messageId), REPLY_ID)
+
+    /**
+     * [mutable] for an action with a RemoteInput: the system has to write the typed text into
+     * the intent, which an immutable PendingIntent forbids.
+     */
+    private fun action(
+        action: String, sessionId: String, messageId: String, choice: String? = null,
+        fallback: String? = null, mutable: Boolean = false,
+    ): PendingIntent {
         val intent = Intent(context, ActionReceiver::class.java)
             .setAction(action)
             .setData(Uri.Builder().scheme("wristbound").authority("notification")
@@ -204,9 +231,11 @@ class Notifier(private val context: Context) {
             .putExtra(ActionReceiver.EXTRA_SESSION, sessionId)
             .putExtra(ActionReceiver.EXTRA_MESSAGE, messageId)
         choice?.let { intent.putExtra(ActionReceiver.EXTRA_CHOICE, it) }
+        fallback?.let { intent.putExtra(ActionReceiver.EXTRA_TEXT, it) }
+        val mutability = if (mutable) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE
         return PendingIntent.getBroadcast(
             context, (action + messageId + choice.orEmpty()).hashCode(), intent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            mutability or PendingIntent.FLAG_UPDATE_CURRENT,
         )
     }
 
@@ -220,6 +249,8 @@ class Notifier(private val context: Context) {
         private const val TOOL_ID = 2
         private const val ERROR_ID = 3
         private const val REPLY_ID = 4
+        /** Enough for the watch's longest reply text; keeps the intent well under Binder limits. */
+        private const val FALLBACK_CHARS = 4000
         private const val TEST_ID = 5
         /** Pebble shows these as the notification's actions. */
         private val APPROVAL_LABELS = mapOf(

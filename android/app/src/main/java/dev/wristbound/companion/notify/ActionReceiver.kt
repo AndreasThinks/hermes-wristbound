@@ -3,6 +3,7 @@ package dev.wristbound.companion.notify
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import androidx.core.app.RemoteInput
 import dev.wristbound.companion.core.Wristbound
 import kotlinx.coroutines.launch
 
@@ -18,7 +19,15 @@ class ActionReceiver : BroadcastReceiver() {
                 when (intent.action) {
                     ACTION_PLAY -> controller.play(sessionId, messageId, speaker = false)
                     ACTION_PLAY_SPEAKER -> controller.play(sessionId, messageId, speaker = true)
-                    ACTION_OPEN_ON_WATCH -> controller.openReplyOnWatch(sessionId, messageId)
+                    ACTION_OPEN_ON_WATCH -> controller.openReplyOnWatch(sessionId, messageId, intent.getStringExtra(EXTRA_TEXT))
+                    ACTION_REPLY -> {
+                        val text = RemoteInput.getResultsFromIntent(intent)
+                            ?.getCharSequence(ReplyNotice.KEY_REPLY_TEXT)?.toString().orEmpty()
+                        // Clear it either way: a notification left up after a RemoteInput keeps
+                        // spinning on the phone. Hermes' answer arrives as a new notification.
+                        controller.notifier.clearReply(sessionId, messageId)
+                        controller.replyFromNotification(sessionId, text)
+                    }
                     ACTION_APPROVE -> intent.getStringExtra(EXTRA_CHOICE)?.let { controller.answerApproval(messageId, it) }
                 }
             } finally {
@@ -31,6 +40,9 @@ class ActionReceiver : BroadcastReceiver() {
         const val ACTION_PLAY = ReplyNotice.ACTION_PLAY
         const val ACTION_PLAY_SPEAKER = ReplyNotice.ACTION_PLAY_SPEAKER
         const val ACTION_OPEN_ON_WATCH = ReplyNotice.ACTION_OPEN_ON_WATCH
+        const val ACTION_REPLY = ReplyNotice.ACTION_REPLY
+        /** For [ACTION_OPEN_ON_WATCH]: the notification's reply text, a fallback. */
+        const val EXTRA_TEXT = "text"
         const val EXTRA_SESSION = "session_id"
         const val EXTRA_MESSAGE = "message_id"
         /** For [ACTION_APPROVE]: Hermes' answer name; [EXTRA_MESSAGE] holds the request id. */
