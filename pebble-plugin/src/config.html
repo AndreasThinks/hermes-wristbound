@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hermes</title>
+<style>
+  :root { --bg: #fff; --fg: #111; --muted: #666; --line: #ddd; --accent: #007a55; --error: #b00020; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #111; --fg: #eee; --muted: #999; --line: #333; --accent: #00ffaa; --error: #ff6b81; } }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 16px/1.45 system-ui, sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 24px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  p { margin: 0 0 12px; color: var(--muted); }
+  label { display: block; margin: 12px 0 4px; font-weight: 600; }
+  input, select, button { width: 100%; box-sizing: border-box; font: inherit; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+  button { margin-top: 16px; background: var(--accent); color: #000; border: 0; font-weight: 600; }
+  button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+  .row input { width: auto; }
+  .hidden { display: none; }
+  #message { min-height: 1.4em; margin-top: 12px; }
+  #message.error { color: var(--error); }
+</style>
+</head>
+<body>
+<h1>Hermes</h1>
+<p>Send messages to Hermes from Index and Pebble apps. Uses your Hermes dashboard over Tailscale, the same address as the Wristbound companion.</p>
+
+<section id="signin">
+  <h2>Sign in</h2>
+  <label for="base">Dashboard address</label>
+  <input id="base" type="url" placeholder="https://hermes.your-tailnet.ts.net:10443" autocapitalize="off" autocorrect="off">
+  <label for="method">Sign in with</label>
+  <select id="method">
+    <option value="password">Username and password</option>
+    <option value="token">Dashboard session token</option>
+  </select>
+  <div id="password-fields">
+    <label for="username">Username</label>
+    <input id="username" autocomplete="username" autocapitalize="off">
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password">
+  </div>
+  <div id="token-fields" class="hidden">
+    <label for="token">Session token</label>
+    <input id="token" type="password" autocapitalize="off">
+  </div>
+  <button id="connect">Sign in</button>
+</section>
+
+<section id="account" class="hidden">
+  <h2>Destination</h2>
+  <label for="destination">When no chat is named, send to</label>
+  <select id="destination"><option value="new">A new Hermes session</option></select>
+  <div class="row"><input id="readonly" type="checkbox"><label for="readonly" style="margin:0;font-weight:400">Don't send into Telegram and other messaging chats</label></div>
+  <h2>Account</h2>
+  <p id="who"></p>
+  <button id="disconnect" class="secondary">Sign out</button>
+</section>
+
+<div id="message" role="status"></div>
+
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  function say(text, isError) { $('message').textContent = text || ''; $('message').className = isError ? 'error' : ''; }
+  function send(message) {
+    return Pebble.sendMessage('plugin', message).then(function (reply) {
+      if (reply && reply.error) throw new Error(reply.error);
+      return reply;
+    });
+  }
+  function show(status) {
+    var signedIn = status && status.signedIn;
+    $('signin').classList.toggle('hidden', !!signedIn);
+    $('account').classList.toggle('hidden', !signedIn);
+    if (status && status.base) $('base').value = status.base;
+    if (status && status.expired) say('Your Hermes sign-in expired. Sign in again.', true);
+    if (!signedIn) return;
+    $('who').textContent = 'Signed in to ' + status.base + (status.username ? ' as ' + status.username : ' with a session token') + '.';
+    $('readonly').checked = !!status.messagingReadOnly;
+    send({ type: 'sessions' }).then(function (reply) {
+      var select = $('destination');
+      select.length = 1;
+      reply.sessions.forEach(function (s) {
+        var option = document.createElement('option');
+        option.value = s.id;
+        option.textContent = s.title + (s.source && s.source !== 'webui' ? ' (' + s.source + ')' : '');
+        select.appendChild(option);
+      });
+      select.value = status.destination;
+      if (select.value !== status.destination) select.value = 'new';
+    }).catch(function (e) { say(e.message, true); });
+  }
+  $('method').addEventListener('change', function () {
+    var token = $('method').value === 'token';
+    $('token-fields').classList.toggle('hidden', !token);
+    $('password-fields').classList.toggle('hidden', token);
+  });
+  $('connect').addEventListener('click', function () {
+    say('Signing in…');
+    var message = { type: 'connect', base: $('base').value };
+    if ($('method').value === 'token') message.token = $('token').value;
+    else { message.username = $('username').value; message.password = $('password').value; }
+    send(message).then(function (status) { $('password').value = ''; $('token').value = ''; say('Signed in.'); show(status); })
+      .catch(function (e) { say(e.message, true); });
+  });
+  $('disconnect').addEventListener('click', function () {
+    send({ type: 'disconnect' }).then(function (status) { say('Signed out.'); show(status); }).catch(function (e) { say(e.message, true); });
+  });
+  $('destination').addEventListener('change', function () {
+    send({ type: 'destination', destination: $('destination').value }).then(function () { say('Saved.'); }).catch(function (e) { say(e.message, true); });
+  });
+  $('readonly').addEventListener('change', function () {
+    send({ type: 'messagingReadOnly', value: $('readonly').checked }).then(function () { say('Saved.'); }).catch(function (e) { say(e.message, true); });
+  });
+  Pebble.addEventListener('ready', function (e) {
+    if (e.target !== 'plugin') return;
+    send({ type: 'status' }).then(show).catch(function (err) { say(err.message, true); });
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,107 @@
+{
+  "name": "hermes-wristbound-plugin",
+  "author": "Hermes Wristbound",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "pebble": {
+    "displayName": "Hermes",
+    "uuid": "3a584c37-ff16-4ab8-b825-3d9c53c341ce",
+    "sdkVersion": "3",
+    "usesPermissions": [
+      {
+        "name": "Internet",
+        "parameters": {
+          "domains": [
+            "ts.net"
+          ]
+        },
+        "reason": "To send your messages to your Hermes dashboard on your tailnet",
+        "required": true
+      }
+    ],
+    "plugin": {
+      "description": "Send messages to Hermes Agent, your self-hosted assistant, and read its latest reply. With no chat named, starts a new Hermes session or uses the default chat chosen in settings. A chat can be named by its title or part of it. Returns a receipt once Hermes accepts the message, not Hermes' answer; use read_latest_reply later for that. Sign in in settings.",
+      "script": "src/plugin/index.js",
+      "sources": [
+        {
+          "category": "agent",
+          "items": ["chats"],
+          "properties": {
+            "name": ["shortText"],
+            "title": ["shortText", "longText"],
+            "preview": ["longText"],
+            "active": ["boolean", "shortText"],
+            "last_active": ["timestamp"]
+          },
+          "supportsMultiple": true,
+          "suggestedRefreshIntervalSec": 300
+        },
+        {
+          "category": "agent",
+          "items": ["configured"],
+          "properties": {
+            "name": ["shortText"],
+            "configured": ["boolean", "shortText"]
+          },
+          "supportsMultiple": false,
+          "suggestedRefreshIntervalSec": 60
+        },
+        {
+          "category": "hermes",
+          "items": ["status"],
+          "properties": {
+            "active_chats": ["numericValue", "shortText", "longText"],
+            "latest_chat": ["shortText", "longText"],
+            "last_active": ["timestamp"]
+          },
+          "supportsMultiple": false,
+          "suggestedRefreshIntervalSec": 120
+        }
+      ],
+      "actions": [
+        {
+          "name": "send_to_agent",
+          "description": "Send a message to Hermes. chat_id is an instanceId from agent/chats, a chat title or part of one; \"new\" starts a new Hermes session; omit it to follow settings. Returns a receipt, not Hermes' answer. Never retry automatically after an uncertain delivery.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8000,
+                "description": "What to tell Hermes, without the \"tell Hermes\" instruction itself."
+              },
+              "chat_id": {
+                "type": ["string", "null"],
+                "description": "A chat's instanceId from agent/chats, its title or part of it, or \"new\". Omit to follow settings."
+              }
+            },
+            "required": ["message"],
+            "additionalProperties": false
+          },
+          "targets": ["agent/chats", "hermes/status"]
+        },
+        {
+          "name": "read_latest_reply",
+          "description": "Read Hermes' latest reply in a chat (by instanceId, title or part of one), or in the most recent chat when none is named.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "chat_id": {
+                "type": ["string", "null"],
+                "description": "A chat's instanceId from agent/chats, its title or part of it. Omit for the most recent chat."
+              }
+            },
+            "additionalProperties": false
+          },
+          "targets": ["agent/chats"]
+        }
+      ]
+    },
+    "configPage": "src/config.html",
+    "projectType": "plugin"
+  }
+}

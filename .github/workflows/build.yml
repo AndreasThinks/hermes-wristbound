@@ -23,6 +23,32 @@ jobs:
           name: watch-pbw
           path: watch/build/watch.pbw
 
+  plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: astral-sh/setup-uv@v6
+      - name: Install Pebble SDK
+        run: |
+          uv tool install pebble-tool
+          yes | pebble sdk install latest
+      - name: Unit tests
+        working-directory: pebble-plugin
+        run: node --test test/*.test.js
+      - name: Build plugin
+        working-directory: pebble-plugin
+        run: pebble build
+      - name: Run in the Pebble plugin host against a scripted Hermes
+        working-directory: pebble-plugin
+        run: NO_PROXY='*' "$(dirname "$(readlink -f "$(which pebble)")")/python" tools/emulator_e2e.py build/pebble-plugin.pbw
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hermes-plugin-pbw
+          path: pebble-plugin/build/pebble-plugin.pbw
+
   android:
     runs-on: ubuntu-latest
     steps:
