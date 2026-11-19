@@ -1,7 +1,7 @@
 {
   "name": "hermes-wristbound-plugin",
   "author": "Hermes Wristbound",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "private": true,
   "scripts": {
     "test": "node --test test/*.test.js"
@@ -23,39 +23,71 @@
       }
     ],
     "plugin": {
-      "description": "Send messages to Hermes Agent, your self-hosted assistant, and read its latest reply. With no chat named, starts a new Hermes session or uses the default chat chosen in settings. A chat can be named by its title or part of it. Returns a receipt once Hermes accepts the message, not Hermes' answer; use read_latest_reply later for that. Sign in in settings.",
+      "description": "Send messages to Hermes Agent, your self-hosted assistant, and read its latest reply. With no chat named, follows the selected settings destination, including an optional persistent ongoing Index conversation. A chat can be named by its title or part of it. Returns a receipt once Hermes accepts the message, not Hermes' answer; use read_latest_reply later for that. Sign in in settings.",
       "script": "src/plugin/index.js",
       "sources": [
         {
           "category": "agent",
-          "items": ["chats"],
+          "items": [
+            "chats"
+          ],
           "properties": {
-            "name": ["shortText"],
-            "title": ["shortText", "longText"],
-            "preview": ["longText"],
-            "active": ["boolean", "shortText"],
-            "last_active": ["timestamp"]
+            "name": [
+              "shortText"
+            ],
+            "title": [
+              "shortText",
+              "longText"
+            ],
+            "preview": [
+              "longText"
+            ],
+            "active": [
+              "boolean",
+              "shortText"
+            ],
+            "last_active": [
+              "timestamp"
+            ]
           },
           "supportsMultiple": true,
           "suggestedRefreshIntervalSec": 300
         },
         {
           "category": "agent",
-          "items": ["configured"],
+          "items": [
+            "configured"
+          ],
           "properties": {
-            "name": ["shortText"],
-            "configured": ["boolean", "shortText"]
+            "name": [
+              "shortText"
+            ],
+            "configured": [
+              "boolean",
+              "shortText"
+            ]
           },
           "supportsMultiple": false,
           "suggestedRefreshIntervalSec": 60
         },
         {
           "category": "hermes",
-          "items": ["status"],
+          "items": [
+            "status"
+          ],
           "properties": {
-            "active_chats": ["numericValue", "shortText", "longText"],
-            "latest_chat": ["shortText", "longText"],
-            "last_active": ["timestamp"]
+            "active_chats": [
+              "numericValue",
+              "shortText",
+              "longText"
+            ],
+            "latest_chat": [
+              "shortText",
+              "longText"
+            ],
+            "last_active": [
+              "timestamp"
+            ]
           },
           "supportsMultiple": false,
           "suggestedRefreshIntervalSec": 120
@@ -64,7 +96,7 @@
       "actions": [
         {
           "name": "send_to_agent",
-          "description": "Send a message to Hermes. chat_id is an instanceId from agent/chats, a chat title or part of one; \"new\" starts a new Hermes session; omit it to follow settings. Returns a receipt, not Hermes' answer. Never retry automatically after an uncertain delivery.",
+          "description": "Send a message to Hermes. Omit chat_id to follow settings; Continue my Index conversation resumes the saved persistent Hermes session (first send creates it). chat_id \"new\" starts a fresh conversation; a named target is one-off. Preserve a leading New Hermes session, then command in the message if not routing explicitly. Never retry automatically after uncertain delivery.",
           "parameters": {
             "type": "object",
             "properties": {
@@ -75,14 +107,22 @@
                 "description": "What to tell Hermes, without the \"tell Hermes\" instruction itself."
               },
               "chat_id": {
-                "type": ["string", "null"],
-                "description": "A chat's instanceId from agent/chats, its title or part of it, or \"new\". Omit to follow settings."
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A session instanceId, exact title or unique title fragment; \"new\" starts fresh. Omit to follow settings, including an ongoing Index conversation."
               }
             },
-            "required": ["message"],
+            "required": [
+              "message"
+            ],
             "additionalProperties": false
           },
-          "targets": ["agent/chats", "hermes/status"]
+          "targets": [
+            "agent/chats",
+            "hermes/status"
+          ]
         },
         {
           "name": "read_latest_reply",
@@ -91,13 +131,18 @@
             "type": "object",
             "properties": {
               "chat_id": {
-                "type": ["string", "null"],
+                "type": [
+                  "string",
+                  "null"
+                ],
                 "description": "A chat's instanceId from agent/chats, its title or part of it. Omit for the most recent chat."
               }
             },
             "additionalProperties": false
           },
-          "targets": ["agent/chats"]
+          "targets": [
+            "agent/chats"
+          ]
         }
       ]
     },

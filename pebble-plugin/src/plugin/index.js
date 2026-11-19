@@ -185,16 +185,6 @@ function createService(env) {
   }
   function settings() { return readLocal(SETTINGS) || {}; }
 
-  function randomBytes(n) {
-    var bytes = new Uint8Array(n);
-    var c = env.crypto;
-    if (c && typeof c.getRandomValues === 'function') return c.getRandomValues(bytes);
-    // No CSPRNG: the PKCE verifier only lives for the two-minute sign-in, but say so in logs.
-    console.log('Hermes: no crypto.getRandomValues; using Math.random for sign-in');
-    for (var i = 0; i < n; i++) bytes[i] = Math.floor(Math.random() * 256);
-    return bytes;
-  }
-
   async function request(base, path, init) {
     var response;
     try {
@@ -238,41 +228,39 @@ function createService(env) {
 
   // The companion's headless native flow (DashboardAuth.signInWithPassword): authorize with PKCE,
   // post the password with the cookie authorize set, then redeem the code from `next`.
-  async function signInWithPassword(base, username, password, wantedProvider) {
+  async function signInWithPassword(base, username, password, wantedProvider, entropy) {
     if (!username || !password) throw PluginError('INVALID_ARGS', 'Enter your Hermes username and password');
+    if (base.indexOf('https://') !== 0) throw PluginError('INVALID_ARGS', 'Password sign-in requires HTTPS');
+    if (!Array.isArray(entropy) || entropy.length !== 56 || entropy.some(function (v) { return !Number.isInteger(v) || v < 0 || v > 255; })) {
+      throw PluginError('INVALID_ARGS', 'Secure randomness is unavailable; reopen settings and try again');
+    }
+    var verifier = base64Url(entropy.slice(0, 32));
+    var state = base64Url(entropy.slice(32));
     var provider = await pickPasswordProvider(base, wantedProvider);
-    var verifier = base64Url(randomBytes(32));
     var challenge = base64Url(sha256(verifier));
-    var state = base64Url(randomBytes(24));
     var query = '?code_challenge=' + challenge + '&code_challenge_method=S256' +
       '&redirect_uri=' + encodeURIComponent(HEADLESS_REDIRECT) + '&state=' + state +
-      '&provider=' + encodeURIComponent(provider);
-    var authorize = await request(base, '/auth/native/authorize' + query, { redirect: 'manual' });
-    if (authorize.status >= 400) throw PluginError('UNKNOWN', 'Hermes refused to start sign-in (' + authorize.status + ')');
+      '&provider=' + encodeURIComponent(provider) + '&response_mode=json';
+    var authorize = await request(base, '/auth/native/authorize' + query, {});
+    if (authorize.status !== 200) throw PluginError('UNKNOWN', 'Hermes refused to start sign-in (' + authorize.status + ')');
+    var authorization;
+    try { authorization = await readJson(authorize, 'native password authorization'); } catch (e) {}
+    if (!authorization || authorization.native_password !== true) {
+      throw PluginError('UNKNOWN', 'This dashboard does not support Pebble password sign-in. See the Hermes plugin setup guide.');
+    }
     var cookie = cookieHeader(authorize);
     var headers = { 'Content-Type': 'application/json' };
     if (cookie) headers.Cookie = cookie;
     var login = await request(base, '/auth/password-login', {
       method: 'POST', headers: headers,
-      body: JSON.stringify({ provider: provider, username: String(username), password: String(password), next: '' }),
+      body: JSON.stringify({ provider: provider, username: String(username), password: String(password), next: '', native_only: true }),
     });
     if (login.status === 401) throw PluginError('AUTH_REQUIRED', 'Wrong username or password');
     if (login.status === 429) throw PluginError('RATE_LIMITED', 'Too many attempts; wait a minute');
     if (login.status !== 200) throw PluginError('UNKNOWN', 'Sign-in failed (' + login.status + ')');
     var next = String((await readJson(login, 'sign-in answer')).next || '');
     if (next.indexOf(HEADLESS_REDIRECT) !== 0) {
-      // The Pebble app's fetch follows redirects itself and hides the authorize cookie, so Hermes
-      // saw a plain browser login and set session cookies on this (non-redirect) answer instead.
-      // Off the gateway's Webapp those tokens work on their own, as bearer and refresh tokens.
-      var cookies = setCookies(login);
-      var at = sessionCookie(cookies, 'hermes_session_at');
-      if (!at) throw PluginError('UNKNOWN', 'Hermes did not return a sign-in code or session; sign in with the session token instead');
-      var rt = sessionCookie(cookies, 'hermes_session_rt');
-      return {
-        base: base, kind: 'native', provider: provider, username: String(username), via: 'cookie',
-        access_token: at.value, refresh_token: rt ? rt.value : '',
-        expires_at: at.maxAge ? Math.floor(now() / 1000) + at.maxAge : 0,
-      };
+      throw PluginError('UNKNOWN', 'Hermes did not return a native sign-in code; sign in with the session token instead');
     }
     var params = {};
     next.replace(/^[^?]*\?/, '').split('&').forEach(function (pair) {
@@ -300,7 +288,8 @@ function createService(env) {
     if (!current.refresh_token) return null;
     var lease = readLocal(REFRESH_LEASE);
     if (lease && now() - lease.at < LEASE_MS) return current;
-    var mine = { at: now(), id: base64Url(randomBytes(9)) };
+    // Lease IDs distinguish overlapping runs, not credentials or PKCE state.
+    var mine = { at: now(), id: String(now()) + '-' + Math.random().toString(36).slice(2) };
     writeLocal(REFRESH_LEASE, mine);
     if ((readLocal(REFRESH_LEASE) || {}).id !== mine.id) return current;
     try {
@@ -380,7 +369,23 @@ function createService(env) {
   async function resolveTarget(chatId) {
     var wanted = chatId == null ? '' : String(chatId).trim();
     if (!wanted) {
-      var preferred = settings().destination || 'new';
+      var prefs = settings();
+      var preferred = prefs.destination || 'new';
+      if (preferred === 'ongoing') {
+        if (!prefs.ongoingSessionId) return null;
+        return { id: prefs.ongoingSessionId, title: 'your ongoing Index conversation', source: 'webui', ongoing: true };
+      }
+      if (preferred === 'latest') {
+        // Read fresh on every send. The cached selector list can miss a chat just opened elsewhere.
+        var recent = await listSessions(50);
+        var latest = recent.find(function (row) {
+          var source = String(row.source || '').toLowerCase();
+          return !row.hidden && source !== 'cron' && source !== 'subagent' &&
+            !(prefs.messagingReadOnly && isMessagingSource(source));
+        });
+        if (!latest) throw PluginError('INVALID_ARGS', 'No eligible recent Hermes conversation; ask for a new session first');
+        return { id: latest.id, title: sessionTitle(latest), source: latest.source || '' };
+      }
       if (preferred === 'new') return null;
       wanted = preferred;
     }
@@ -482,7 +487,14 @@ function createService(env) {
     var message = String((args && args.message) || '').trim();
     if (!message) throw PluginError('INVALID_ARGS', 'Nothing to send');
     if (message.length > MAX_MESSAGE) throw PluginError('INVALID_ARGS', 'That message is too long for Hermes from the watch');
-    var target = await resolveTarget(args && args.chat_id);
+    // Index can leave this spoken command in the transcript instead of setting chat_id.
+    var fresh = /^new\s+hermes\s+session(?:(?:\s*[,:.!?;]\s*(?:then\b\s*[,:;]?\s*)?)|\s+then\b\s*[,:;]?\s*|$)/i.exec(message);
+    if (fresh) {
+      message = message.slice(fresh[0].length).trim();
+      if (!message) throw PluginError('INVALID_ARGS', 'Say a message after “New Hermes session”');
+    }
+    var startPrefs = settings();
+    var target = await resolveTarget(fresh ? 'new' : args && args.chat_id);
     if (target && isMessagingSource(target.source) && settings().messagingReadOnly) {
       throw PluginError('INVALID_ARGS', '"' + target.title + '" is a ' + target.source + ' chat; reply there instead');
     }
@@ -502,16 +514,27 @@ function createService(env) {
       if (!runtime) throw PluginError('UNKNOWN', 'Hermes did not open the session; not sent');
       // queued=true waits behind a running turn instead of redirecting it, as the companion does.
       var ack = await call('prompt.submit', { session_id: runtime, text: message, queued: true }, true);
+      if (ack.status === 'rejected') throw PluginError('INVALID_ARGS', 'Hermes declined the message; not sent');
+      if (ack.status !== 'streaming' && ack.status !== 'queued') {
+        throw PluginError('UNKNOWN', 'Hermes did not confirm delivery; check Hermes before sending again');
+      }
       return { stored: stored, queued: ack.status === 'queued' };
     });
     if (!target && outcome.stored) {
+      var savedSettings = settings();
+      if (startPrefs.destination === 'ongoing' && savedSettings.destination === 'ongoing' &&
+          savedSettings.base === startPrefs.base && savedSettings.ongoingSessionId === startPrefs.ongoingSessionId &&
+          savedSettings.routingEpoch === startPrefs.routingEpoch) {
+        savedSettings.ongoingSessionId = outcome.stored;
+        writeLocal(SETTINGS, savedSettings);
+      }
       var cached = readLocal(SESSIONS);
       if (cached) {
         cached.rows.unshift({ id: outcome.stored, title: message.slice(0, 60), source: 'webui' });
         writeLocal(SESSIONS, cached);
       }
     }
-    var where = target ? '"' + target.title + '"' : 'a new Hermes session';
+    var where = target ? (target.ongoing ? 'your ongoing Index conversation' : '"' + target.title + '"') : 'a new Hermes session';
     return {
       text: (outcome.queued ? 'Queued for ' : 'Sent to ') + where + '.',
       refreshed: ['agent/chats', 'hermes/status'],
@@ -604,7 +627,7 @@ function createService(env) {
       signedIn: !!(current && !current.expired), expired: !!(current && current.expired),
       base: current ? current.base : (s.base || ''), kind: current ? current.kind : null,
       username: current && current.username || null,
-      destination: s.destination || 'new', messagingReadOnly: !!s.messagingReadOnly,
+      destination: s.destination || 'new', ongoingSessionId: s.ongoingSessionId || null, messagingReadOnly: !!s.messagingReadOnly,
     };
   }
 
@@ -613,6 +636,10 @@ function createService(env) {
     if (type === 'status') return status();
     if (type === 'connect') {
       var base = normaliseBase(message.base);
+      if (!message.token && base.indexOf('https://') !== 0) throw PluginError('INVALID_ARGS', 'Password sign-in requires HTTPS');
+      if (!message.token && (!Array.isArray(message.auth_entropy) || message.auth_entropy.length !== 56 || message.auth_entropy.some(function (v) { return !Number.isInteger(v) || v < 0 || v > 255; }))) {
+        throw PluginError('INVALID_ARGS', 'Secure randomness is unavailable; reopen settings and try again');
+      }
       var probe = await request(base, '/api/status', {});
       if (probe.status !== 200) throw PluginError('UNKNOWN', 'That address did not answer like a Hermes dashboard');
       var info = await readJson(probe, 'status');
@@ -620,16 +647,22 @@ function createService(env) {
         ? await signInWithToken(base, message.token)
         : info.auth_required === false
           ? (function () { throw PluginError('INVALID_ARGS', 'This dashboard has no sign-in page; paste its session token'); })()
-          : await signInWithPassword(base, message.username, message.password, message.provider);
+          : await signInWithPassword(base, message.username, message.password, message.provider, message.auth_entropy);
       await saveCredentials(next);
       var s = settings();
-      if (s.base !== base) s = { base: base, destination: 'new' };
+      if (s.base !== base) s = { base: base, destination: 'new', ongoingSessionId: null };
+      s.routingEpoch = String(now()) + '-' + Math.random().toString(36).slice(2);
+      delete s.ongoingSessionId;
       writeLocal(SETTINGS, s);
       writeLocal(SESSIONS, null);
       return status();
     }
     if (type === 'disconnect') {
       await saveCredentials(null);
+      var reset = settings();
+      delete reset.ongoingSessionId;
+      reset.routingEpoch = String(now()) + '-' + Math.random().toString(36).slice(2);
+      writeLocal(SETTINGS, reset);
       writeLocal(SESSIONS, null);
       return status();
     }
@@ -639,6 +672,7 @@ function createService(env) {
     }
     if (type === 'destination') {
       var dest = String(message.destination || 'new');
+      if (['new', 'ongoing', 'latest'].indexOf(dest) < 0 && !/^[A-Za-z0-9_-]+$/.test(dest)) throw PluginError('INVALID_ARGS', 'Invalid destination');
       writeLocal(SETTINGS, Object.assign(settings(), { destination: dest }));
       return status();
     }

@@ -1,0 +1,5 @@
+# Hermes dashboard compatibility
+
+Password sign-in requires the non-redirecting native PKCE handshake. The Pebble runtime can follow authorize redirects and lose the broker cookie. The compatibility patch returns a single broker cookie in a non-redirecting response and refuses to fall back to a browser session for native-only sign-in. The one-time code exchange and existing rate limiting remain in place.
+
+[Download the server-side patch](hermes-native-password.patch). It was tested against Hermes checkout `10f7fa7d87a3de770da8b0f5910743cb1c77058d`. This is not bundled into the plugin or represented as an upstream Hermes release. If your dashboard already supports the handshake, no patch is needed. Otherwise, in an isolated copy of a compatible Hermes source tree, run `git apply --check /path/to/hermes-native-password.patch` before applying it. If the check fails, do not force it. Test, then deploy through your normal dashboard rollout. Serve the authenticated dashboard over private HTTPS.

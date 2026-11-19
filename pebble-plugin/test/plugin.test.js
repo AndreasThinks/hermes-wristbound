@@ -38,9 +38,10 @@ function fixture({ routes = {}, gateway = {}, now = 1_800_000_000_000 } = {}) {
   const allRoutes = {
     'GET /api/status': () => json({ auth_required: true }),
     'GET /api/auth/providers': () => json({ providers: [{ name: 'basic', display_name: 'Password', supports_password: true }] }),
-    'GET /auth/native/authorize': () => json({}, 302, { 'set-cookie': 'hermes_pkce=abc123; Path=/; HttpOnly; SameSite=Lax' }),
+    'GET /auth/native/authorize': (init, url) => { assert.equal(url.searchParams.get('response_mode'), 'json'); return json({ native_password: true }, 200, { 'set-cookie': 'hermes_pkce=abc123; Path=/; HttpOnly; SameSite=Lax' }); },
     'POST /auth/password-login': (init, url, f) => {
       assert.equal(init.headers.Cookie, 'hermes_pkce=abc123');
+      assert.equal(JSON.parse(init.body).native_only, true);
       const state = f.lastAuthorize.searchParams.get('state');
       return json({ ok: true, next: 'http://127.0.0.1/wristbound?code=CODE1&state=' + state });
     },
@@ -81,7 +82,7 @@ function fixture({ routes = {}, gateway = {}, now = 1_800_000_000_000 } = {}) {
     local: { getItem: (k) => local.has(k) ? local.get(k) : null, setItem: (k, v) => local.set(k, String(v)), removeItem: (k) => local.delete(k) },
     fetch, WebSocket: socketClass(gatewayHandlers, socketLog), crypto: crypto.webcrypto, now: () => clock.now,
   });
-  f.signIn = () => f.service.config({ type: 'connect', base: 'hermes.tail1234.ts.net:10443', username: 'andreas', password: 'pw' });
+  f.signIn = () => f.service.config({ type: 'connect', base: 'hermes.tail1234.ts.net:10443', username: 'andreas', password: 'pw', auth_entropy: Array.from({ length: 56 }, (_, i) => i) });
   return f;
 }
 
@@ -110,7 +111,8 @@ test('password sign-in runs the native PKCE flow and keeps tokens only in secure
   assert.equal(status.signedIn, true);
   assert.equal(status.kind, 'native');
   const authorize = f.calls.find((c) => c.key === 'GET /auth/native/authorize');
-  assert.equal(authorize.init.redirect, 'manual');
+  assert.equal(authorize.init.redirect, undefined);
+  assert.equal(new URL(authorize.url).searchParams.get('response_mode'), 'json');
   const challenge = new URL(authorize.url).searchParams.get('code_challenge');
   const verifier = JSON.parse(f.calls.find((c) => c.key === 'POST /auth/native/token').init.body).code_verifier;
   assert.equal(crypto.createHash('sha256').update(verifier).digest('base64url'), challenge);
@@ -119,25 +121,18 @@ test('password sign-in runs the native PKCE flow and keeps tokens only in secure
   assert.ok(!JSON.stringify(status).includes('AT1'));
 });
 
-test('when fetch hides the authorize cookie, the session cookies from the login answer are used', async () => {
-  // The Pebble app's fetch follows the authorize redirect itself, so no PKCE cookie reaches us and
-  // Hermes answers as for a browser login: session cookies on a 200.
-  const f = fixture({ routes: {
-    'GET /auth/native/authorize': () => json({}, 200),
-    'POST /auth/password-login': (init) => {
-      assert.equal(init.headers.Cookie, undefined);
-      return json({ ok: true, next: '/' }, 200, { 'set-cookie':
-        '__Host-hermes_session_at=AT-C; Max-Age=900; Path=/; Secure; HttpOnly, __Host-hermes_session_rt=RT-C; Max-Age=2592000; Path=/; Secure; HttpOnly, hermes_session_provider=basic; Path=/' });
-    },
-  } });
-  const status = await f.signIn();
-  assert.equal(status.signedIn, true);
-  const saved = JSON.parse(f.secure.get('hermes.credentials.v1'));
-  assert.equal(saved.access_token, 'AT-C');
-  assert.equal(saved.refresh_token, 'RT-C');
-  assert.equal(saved.expires_at, f.clock.now / 1000 + 900);
-  await f.service.source({ category: 'agent', item: 'chats' });
-  assert.equal(f.calls.at(-1).init.headers.Authorization, 'Bearer AT-C');
+test('unsafe password login without native authorize contract fails closed', async () => {
+  const f = fixture({ routes: { 'GET /auth/native/authorize': () => json({ native_password: true }, 200), 'POST /auth/password-login': () => json({ next: '/' }, 200, { 'set-cookie': 'hermes_session_at=BAD' }) } });
+  await assert.rejects(f.signIn(), /native sign-in code/);
+  assert.equal(f.secure.size, 0);
+});
+
+
+test('password sign-in rejects missing trusted entropy and HTTP', async () => {
+  const f = fixture();
+  await assert.rejects(f.service.config({ type: 'connect', base: BASE, username: 'u', password: 'p' }), /Secure randomness/);
+  await assert.rejects(f.service.config({ type: 'connect', base: 'http://hermes.tail1234.ts.net:10443', username: 'u', password: 'p', auth_entropy: Array.from({ length: 56 }, (_, i) => i) }), /requires HTTPS/);
+  assert.equal(f.calls.filter((c) => c.key === 'GET /auth/native/authorize').length, 0);
 });
 
 test('a login answer with neither a code nor a session says what to do', async () => {
@@ -168,6 +163,58 @@ test('send_to_agent with no chat starts a new session and closes the socket afte
   assert.ok(f.socketLog.at(-1).close);
 });
 
+test('ongoing Index mode starts, continues, switches, and continues the replacement', async () => {
+  let created = 0;
+  const f = fixture({ gateway: { 'session.create': () => {
+    created++;
+    return { session_id: 'rt-new-' + created, stored_session_id: 's-new-' + created };
+  } } });
+  await f.signIn();
+  await f.service.config({ type: 'destination', destination: 'ongoing' });
+  async function send(message, chat_id) {
+    return (await f.service.action({ action: 'send_to_agent', args: { message, chat_id } })).session_id;
+  }
+  assert.equal(await send('first'), 's-new-1');
+  assert.equal(await send('follow-up'), 's-new-1');
+  assert.equal(await send('fresh', 'new'), 's-new-2');
+  assert.equal(await send('named one-off', 's-repo'), 's-repo');
+  assert.equal(await send('second follow-up'), 's-new-2');
+  assert.equal(created, 2);
+});
+
+test('spoken fresh-session prefix overrides the default and is not forwarded', async () => {
+  let created = 0;
+  const f = fixture({ gateway: { 'session.create': () => {
+    created++;
+    return { session_id: 'rt-new-' + created, stored_session_id: 's-new-' + created };
+  } } });
+  await f.signIn();
+  await f.service.config({ type: 'destination', destination: 'ongoing' });
+  const send = (message, chat_id) => f.service.action({ action: 'send_to_agent', args: { message, chat_id } });
+  await send('Start here');
+  assert.equal((await send('Discuss a new Hermes session, then stay here')).session_id, 's-new-1');
+  await assert.rejects(send('New Hermes session.'), /Say a message/);
+  assert.equal((await send('New Hermes session, then reply with Beta', 's-repo')).session_id, 's-new-2');
+  assert.equal((await send('Follow up')).session_id, 's-new-2');
+  assert.deepEqual(f.socketLog.filter(x => x.method === 'prompt.submit').map(x => x.params.text), [
+    'Start here', 'Discuss a new Hermes session, then stay here', 'reply with Beta', 'Follow up',
+  ]);
+});
+
+test('an uncertain fresh send keeps the ongoing destination, without replay', async () => {
+  let created = 0;
+  const f = fixture({ gateway: {
+    'session.create': () => ({ session_id: 'rt-new-' + (++created), stored_session_id: 's-new-' + created }),
+    'prompt.submit': (p) => p.text === 'uncertain' ? 'drop' : { status: 'streaming' },
+  } });
+  await f.signIn();
+  await f.service.config({ type: 'destination', destination: 'ongoing' });
+  await f.service.action({ action: 'send_to_agent', args: { message: 'first', chat_id: 'new' } });
+  await assert.rejects(f.service.action({ action: 'send_to_agent', args: { message: 'uncertain', chat_id: 'new' } }), /before sending again/);
+  assert.equal((await f.service.config({ type: 'status' })).ongoingSessionId, 's-new-1');
+  assert.equal(f.socketLog.filter(x => x.method === 'prompt.submit' && x.params.text === 'uncertain').length, 1);
+});
+
 test('chat_id resolves by id, exact title and unique partial title', async () => {
   const f = fixture();
   await f.signIn();
@@ -186,6 +233,38 @@ test('the default destination and messaging read-only setting apply', async () =
   assert.equal((await f.service.action({ action: 'send_to_agent', args: { message: 'x' } })).text, 'Sent to "Repo cleanup".');
   await f.service.config({ type: 'messagingReadOnly', value: true });
   await assert.rejects(f.service.action({ action: 'send_to_agent', args: { message: 'x', chat_id: 'Groceries' } }), /telegram chat/);
+});
+
+test('latest destination rechecks server recency and honours explicit targets', async () => {
+  let rows = [{ id: 's-a', title: 'Desktop A', source: 'webui' }];
+  const f = fixture({ routes: { 'GET /api/sessions': (_, url) => {
+    assert.equal(url.searchParams.get('order'), 'recent');
+    return json({ sessions: rows });
+  } } });
+  await f.signIn();
+  await f.service.config({ type: 'destination', destination: 'latest' });
+  const send = (message, chat_id) => f.service.action({ action: 'send_to_agent', args: { message, chat_id } });
+  assert.equal((await send('First')).session_id, 's-a');
+  rows = [{ id: 's-archived', archived: true }, { id: 's-cron', source: 'cron' },
+    { id: 's-b', title: 'Desktop B', source: 'webui' }, ...rows];
+  assert.equal((await send('After a desktop chat')).session_id, 's-b');
+  assert.equal((await send('Named one-off', 's-a')).session_id, 's-a');
+  assert.equal((await send('New Hermes session, then Fresh')).session_id, 's-new');
+  rows.unshift({ id: 's-new', title: 'Fresh', source: 'webui' });
+  assert.equal((await send('Continue fresh')).session_id, 's-new');
+});
+
+test('latest destination skips messaging chats if read-only and never guesses when only excluded chats remain', async () => {
+  const rows = [{ id: 's-tg', source: 'telegram' }, { id: 's-ui', source: 'webui' }];
+  const f = fixture({ routes: { 'GET /api/sessions': () => json({ sessions: rows }) } });
+  await f.signIn();
+  await f.service.config({ type: 'destination', destination: 'latest' });
+  await f.service.config({ type: 'messagingReadOnly', value: true });
+  const send = () => f.service.action({ action: 'send_to_agent', args: { message: 'hello' } });
+  assert.equal((await send()).session_id, 's-ui');
+  rows.pop();
+  await assert.rejects(send(), /No eligible recent Hermes conversation/);
+  assert.equal(f.socketLog.filter(x => x.method === 'session.create').length, 0);
 });
 
 test('a queued prompt says so', async () => {
