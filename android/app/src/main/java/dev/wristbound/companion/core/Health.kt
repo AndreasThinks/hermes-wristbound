@@ -41,12 +41,20 @@ data class Health(
             watchOpen: Boolean,
             lastCheckAt: Long,
             now: Long,
+            /** Hermes' changes reach the phone as they happen (the listening socket is open). */
+            live: Boolean = false,
         ): Health {
             val watch = if (watchOpen) LinkState.OK else LinkState.UNKNOWN
             val checking = watchOpen || speed != ReplySpeed.WATCH_ONLY
             val last = if (lastCheckAt > 0) "Last reached Hermes ${ago(now - lastCheckAt)}" else "Not checked yet"
             val where = if (watchOpen) "watchapp open" else "watchapp closed"
-            val detail = "$last · $where"
+            // Say how replies are found, so a fallback to checking is visible rather than silent.
+            val how = when {
+                !checking -> null
+                live -> "live"
+                else -> "checking every ${ReplySpeed.within(intervalSeconds)}"
+            }
+            val detail = listOfNotNull(last, how, where).joinToString(" · ")
 
             fun problem(hermes: LinkState, phone: LinkState, headline: String, why: String, fix: HealthFix) =
                 Health(hermes, phone, watch, headline, why, fix)
@@ -72,6 +80,7 @@ data class Health(
 
             val headline = when {
                 speed == ReplySpeed.WATCH_ONLY && !watchOpen -> "Replies wait until you open Wristbound on the watch"
+                live -> "All good. Replies reach your wrist as they arrive."
                 else -> "All good. Replies reach your wrist within ${ReplySpeed.within(intervalSeconds)}."
             }
             return Health(hermes, LinkState.OK, watch, headline, detail, null)

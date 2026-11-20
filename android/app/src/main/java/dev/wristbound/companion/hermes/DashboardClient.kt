@@ -40,6 +40,9 @@ class DashboardClient(
     private val slowHttp = this.http.newBuilder().readTimeout(120, TimeUnit.SECONDS).build()
     // OkHttp's own pings keep NAT and the tailnet path warm; the gateway adds its JSON heartbeat.
     private val wsHttp = http.newBuilder().pingInterval(20, TimeUnit.SECONDS).readTimeout(0, TimeUnit.SECONDS).build()
+    // The idle listener pings rarely: each ping wakes the phone and the radio. Over Tailscale the
+    // tunnel keeps the path open, so this only has to notice a socket that died without a close.
+    private val listenHttp = http.newBuilder().pingInterval(LISTENER_PING_MINUTES, TimeUnit.MINUTES).readTimeout(0, TimeUnit.SECONDS).build()
 
     override suspend fun listSessions(limit: Int, excludeSources: List<String>): List<HermesSession> = withContext(Dispatchers.IO) {
         val url = url("api/sessions") {
@@ -69,6 +72,17 @@ class DashboardClient(
         val (name, value) = auth.webSocketCredential(http)
         val url = url("api/ws") { addQueryParameter(name, value) }
         return GatewaySocket.connect(wsHttp, Request.Builder().url(url).build())
+    }
+
+    /**
+     * Open a gateway socket that only listens for broadcasts such as `sessions.changed`: no
+     * JSON heartbeat, rare pings, and no `client.capabilities`, so Hermes never routes an approval
+     * to it.
+     */
+    suspend fun openListener(): Gateway {
+        val (name, value) = auth.webSocketCredential(http)
+        val url = url("api/ws") { addQueryParameter(name, value) }
+        return GatewaySocket.connect(listenHttp, Request.Builder().url(url).build(), heartbeat = false)
     }
 
     /** Download audio Hermes produced (a `MEDIA:` path) into [dir]. Cached by path. */
@@ -114,6 +128,7 @@ class DashboardClient(
 
     companion object {
         private const val MAX_AUDIO_BYTES = 50L * 1024 * 1024
+        private const val LISTENER_PING_MINUTES = 5L
 
         fun mimeFor(ext: String): String = when (ext.lowercase()) {
             "ogg", "opus" -> "audio/ogg"

@@ -16,14 +16,15 @@ class HealthTest {
         interval: Int = 60,
         watchOpen: Boolean = false,
         lastCheckAt: Long = now - 40_000L,
-    ) = Health.of(signedIn, backend, canNotify, batteryExempt, speed, interval, watchOpen, lastCheckAt, now)
+        live: Boolean = false,
+    ) = Health.of(signedIn, backend, canNotify, batteryExempt, speed, interval, watchOpen, lastCheckAt, now, live)
 
     @Test
     fun allGoodSaysHowLateARepliesCanBe() {
         val h = health()
         assertTrue(h.ok)
         assertEquals("All good. Replies reach your wrist within ~1 min.", h.headline)
-        assertEquals("Last reached Hermes 40 s ago · watchapp closed", h.detail)
+        assertEquals("Last reached Hermes 40 s ago · checking every ~1 min · watchapp closed", h.detail)
         assertEquals(LinkState.UNKNOWN, h.watch)
         assertEquals(LinkState.OK, health(watchOpen = true).watch)
     }
@@ -65,5 +66,15 @@ class HealthTest {
         assertEquals("3 min ago", Health.ago(200_000))
         assertEquals("2 h ago", Health.ago(7_500_000))
         assertEquals("3 d ago", Health.ago(260_000_000))
+    }
+
+    @Test
+    fun liveUpdatesSayRepliesArriveAsTheyHappen() {
+        val h = health(live = true, interval = 900, lastCheckAt = now - 10 * 60_000L)
+        assertTrue(h.ok)
+        assertEquals("All good. Replies reach your wrist as they arrive.", h.headline)
+        assertEquals("Last reached Hermes 10 min ago · live · watchapp closed", h.detail)
+        // Off is a choice: no "live" or interval to report.
+        assertEquals("Last reached Hermes 40 s ago · watchapp closed", health(speed = ReplySpeed.WATCH_ONLY).detail)
     }
 }
