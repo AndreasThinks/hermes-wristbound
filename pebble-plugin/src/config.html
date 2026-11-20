@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hermes</title>
+<style>
+  :root { --bg: #fff; --fg: #111; --muted: #666; --line: #ddd; --accent: #007a55; --error: #b00020; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #111; --fg: #eee; --muted: #999; --line: #333; --accent: #00ffaa; --error: #ff6b81; } }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 16px/1.45 system-ui, sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 24px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  p { margin: 0 0 12px; color: var(--muted); }
+  label { display: block; margin: 12px 0 4px; font-weight: 600; }
+  input, select, button { width: 100%; box-sizing: border-box; font: inherit; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+  button { margin-top: 16px; background: var(--accent); color: #000; border: 0; font-weight: 600; }
+  button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+  .row input { width: auto; }
+  .hidden { display: none; }
+  #message { min-height: 1.4em; margin-top: 12px; }
+  #message.error { color: var(--error); }
+</style>
+</head>
+<body>
+<h1>Hermes</h1>
+<p>Send messages to Hermes from Index and Pebble apps. Connects directly to your self-hosted Hermes dashboard. No Wristbound companion or Telegram account needed.</p>
+
+<section id="signin">
+  <h2>Sign in</h2>
+  <p>Use your dashboard HTTPS address, not the Hermes API port. Password sign-in requires a dashboard with Pebble-compatible native sign-in.</p>
+  <label for="base">Dashboard address</label>
+  <input id="base" type="url" placeholder="https://hermes.your-tailnet.ts.net:10443" autocapitalize="off" autocorrect="off">
+  <label for="method">Sign in with</label>
+  <select id="method">
+    <option value="password">Username and password</option>
+    <option value="token">Dashboard session token</option>
+  </select>
+  <div id="password-fields">
+    <label for="username">Username</label>
+    <input id="username" autocomplete="username" autocapitalize="off">
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password">
+  </div>
+  <div id="token-fields" class="hidden">
+    <label for="token">Session token</label>
+    <input id="token" type="password" autocapitalize="off">
+  </div>
+  <button id="connect">Sign in</button>
+</section>
+
+<section id="account" class="hidden">
+  <h2>Destination</h2>
+  <label for="destination">When no chat is named, send to</label>
+  <select id="destination"><option value="new">A new Hermes session</option><option value="ongoing">Continue my Index conversation</option><option value="latest">Most recently active Hermes conversation</option></select>
+  <p id="destination-help"></p>
+  <p>To start fresh from Index, say “New Hermes session, then …” followed by your message. Name a chat to send there once.</p>
+  <div class="row"><input id="readonly" type="checkbox"><label for="readonly" style="margin:0;font-weight:400">Don't send into Telegram and other messaging chats</label></div>
+  <h2>Account</h2>
+  <p id="who"></p>
+  <button id="disconnect" class="secondary">Sign out</button>
+</section>
+
+<div id="message" role="status"></div>
+
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  var builtInDestinations = $('destination').options.length;
+  function say(text, isError) { $('message').textContent = text || ''; $('message').className = isError ? 'error' : ''; }
+  function send(message) {
+    return Pebble.sendMessage('plugin', message).then(function (reply) {
+      if (reply && reply.error) throw new Error(reply.error);
+      return reply;
+    });
+  }
+  function updateDestinationHelp() {
+    var value = $('destination').value;
+    $('destination-help').textContent = value === 'latest'
+      ? 'Follows your most recently active eligible chat, including chats used on desktop.'
+      : value === 'ongoing' ? 'Keeps one Index conversation until you explicitly start a new one.'
+      : value === 'new' ? 'Starts a separate conversation for each capture.'
+      : 'Sends to this specific conversation until you change the setting.';
+  }
+  function show(status) {
+    var signedIn = status && status.signedIn;
+    $('signin').classList.toggle('hidden', !!signedIn);
+    $('account').classList.toggle('hidden', !signedIn);
+    if (status && status.base) $('base').value = status.base;
+    if (status && status.expired) say('Your Hermes sign-in expired. Sign in again.', true);
+    if (!signedIn) return;
+    $('who').textContent = 'Signed in to ' + status.base + (status.username ? ' as ' + status.username : ' with a session token') + '.';
+    $('readonly').checked = !!status.messagingReadOnly;
+    var select = $('destination');
+    function setDestination(sessions) {
+      select.length = builtInDestinations;
+      sessions.forEach(function (s) {
+        var option = document.createElement('option');
+        option.value = s.id;
+        option.textContent = s.title + (s.source && s.source !== 'webui' ? ' (' + s.source + ')' : '');
+        select.appendChild(option);
+      });
+      select.value = status.destination;
+      if (select.value !== status.destination) {
+        var saved = document.createElement('option');
+        saved.value = status.destination;
+        saved.textContent = 'Saved conversation (not in recent list)';
+        select.appendChild(saved);
+        select.value = saved.value;
+      }
+      updateDestinationHelp();
+    }
+    setDestination([]);
+    select.disabled = true;
+    send({ type: 'sessions' }).then(function (reply) { setDestination(reply.sessions); })
+      .catch(function (e) { say('Could not load recent chats. ' + e.message, true); })
+      .finally(function () { select.disabled = false; });
+  }
+  $('method').addEventListener('change', function () {
+    var token = $('method').value === 'token';
+    $('token-fields').classList.toggle('hidden', !token);
+    $('password-fields').classList.toggle('hidden', token);
+  });
+  $('connect').addEventListener('click', function () {
+    say('Signing in…');
+    var message = { type: 'connect', base: $('base').value };
+    if ($('method').value === 'token') message.token = $('token').value;
+    else {
+      message.username = $('username').value; message.password = $('password').value;
+      try {
+        if (!window.crypto || typeof window.crypto.getRandomValues !== 'function') throw new Error('Secure randomness is unavailable in this settings view.');
+        var entropy = new Uint8Array(56); window.crypto.getRandomValues(entropy); message.auth_entropy = Array.from(entropy); entropy.fill(0);
+      } catch (e) { $('password').value = ''; say(e.message || 'Secure randomness is unavailable.', true); return; }
+    }
+    send(message).then(function (status) { $('password').value = ''; $('token').value = ''; delete message.auth_entropy; say('Signed in.'); show(status); })
+      .catch(function (e) { say(e.message, true); });
+  });
+  $('disconnect').addEventListener('click', function () {
+    send({ type: 'disconnect' }).then(function (status) { say('Signed out.'); show(status); }).catch(function (e) { say(e.message, true); });
+  });
+  $('destination').addEventListener('change', function () {
+    var select = $('destination');
+    updateDestinationHelp();
+    select.disabled = true;
+    send({ type: 'destination', destination: select.value }).then(function () { say('Destination saved.'); })
+      .catch(function (e) { say(e.message, true); return send({ type: 'status' }).then(show).catch(function () {}); })
+      .finally(function () { select.disabled = false; });
+  });
+  $('readonly').addEventListener('change', function () {
+    send({ type: 'messagingReadOnly', value: $('readonly').checked }).then(function () { say('Saved.'); }).catch(function (e) { say(e.message, true); });
+  });
+  Pebble.addEventListener('ready', function (e) {
+    if (e.target !== 'plugin') return;
+    send({ type: 'status' }).then(show).catch(function (err) { say(err.message, true); });
+  });
+</script>
+</body>
+</html>
