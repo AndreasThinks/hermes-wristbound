@@ -55,6 +55,7 @@ import dev.wristbound.companion.core.AlertRecord
 import dev.wristbound.companion.core.AlertStyle
 import dev.wristbound.companion.core.Health
 import dev.wristbound.companion.core.HealthFix
+import dev.wristbound.companion.core.Live
 import dev.wristbound.companion.core.LinkState
 import dev.wristbound.companion.core.MessagingChats
 import dev.wristbound.companion.core.ReplySpeed
@@ -141,6 +142,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch { controller.backend.collect { render() } }
+                launch { controller.liveUpdates.collect { render() } }
                 launch { controller.alertLog.collect { render() } }
             }
         }
@@ -297,7 +299,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun drawSpeed() {
         val s = controller.settings
-        column.addView(note("Replies to what you ask from the watch stream in live. This is for everything else: the desktop, Telegram, and Hermes's own follow-ups."))
+        column.addView(note("Hermes tells the phone about new replies as they happen, from the desktop, Telegram or its own follow-ups, so they reach your wrist within seconds. The speed below is how often to check instead whenever that connection is down."))
         val current = s.replySpeed
         ReplySpeed.entries.forEach { speed ->
             column.addView(option(speed.title, speed.note, speed == current) {
@@ -311,7 +313,7 @@ class MainActivity : AppCompatActivity() {
                 "Battery is optimised, so checks can be held back for many minutes while the phone sleeps.",
                 HealthFix.BATTERY.label) { requestBatteryExemption() })
         }
-        column.addView(note("While the watchapp is open it checks every ${Wristbound.FOREGROUND_POLL_SECONDS} s whatever you pick here. Background checking shows a silent ongoing notification, which Android requires.")
+        column.addView(note("While the connection is up it still checks every ${Wristbound.SAFETY_NET_SECONDS / 60} min as a backstop. While it is down and the watchapp is open it checks every ${Wristbound.FOREGROUND_POLL_SECONDS} s whatever you pick here. Background checking shows a silent ongoing notification, which Android requires.")
             .apply { setPadding(0, dp(12), 0, 0) })
     }
 
@@ -547,6 +549,7 @@ class MainActivity : AppCompatActivity() {
             watchOpen = controller.watchOpen,
             lastCheckAt = s.lastCheckAt,
             now = System.currentTimeMillis(),
+            live = controller.liveUpdates.value == Live.LIVE,
         )
     }
 

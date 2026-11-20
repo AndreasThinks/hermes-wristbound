@@ -66,6 +66,6 @@ class CheckReceiver : BroadcastReceiver() {
 
     private companion object {
         // A safety cap: Wristbound.scheduledCheck gives up well before this.
-        const val WAKE_TIMEOUT_MS = 45_000L
+        const val WAKE_TIMEOUT_MS = 60_000L
     }
 }

@@ -78,7 +78,8 @@ interface Gateway : AutoCloseable {
 
 /**
  * [Gateway] over an OkHttp WebSocket. The wire format is newline-delimited JSON-RPC 2.0; the
- * server sends `gateway.ready` first and expects a `gateway.ping` every 15 seconds.
+ * server sends `gateway.ready` first and answers `gateway.ping`, which a turn sends every 15 seconds
+ * to notice a dead socket quickly. The server does not require it: an idle listener skips it.
  */
 class GatewaySocket private constructor() : Gateway, WebSocketListener() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -219,7 +220,13 @@ class GatewaySocket private constructor() : Gateway, WebSocketListener() {
         private const val HEARTBEAT_MS = 15_000L
 
         /** Open [request] (an `http(s)://.../api/ws?...` URL) and wait for `gateway.ready`. */
-        suspend fun connect(http: OkHttpClient, request: Request, readyTimeoutMs: Long = 20_000): GatewaySocket {
+        suspend fun connect(
+            http: OkHttpClient,
+            request: Request,
+            readyTimeoutMs: Long = 20_000,
+            /** Send `gateway.ping` every 15 s. Off for an idle listener, where it would keep the phone awake. */
+            heartbeat: Boolean = true,
+        ): GatewaySocket {
             val gateway = GatewaySocket()
             gateway.socket = http.newWebSocket(request, gateway)
             try {
@@ -229,7 +236,7 @@ class GatewaySocket private constructor() : Gateway, WebSocketListener() {
                 gateway.shutdown(e)
                 throw if (e is IOException) e else GatewayClosedException("Gateway did not become ready", e)
             }
-            gateway.startHeartbeat()
+            if (heartbeat) gateway.startHeartbeat()
             return gateway
         }
 

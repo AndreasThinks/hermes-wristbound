@@ -1,6 +1,7 @@
 package dev.wristbound.companion.core
 
 import android.content.Context
+import android.os.PowerManager
 import android.util.Log
 import dev.wristbound.companion.hermes.DashboardAuth
 import dev.wristbound.companion.hermes.DashboardClient
@@ -100,6 +101,26 @@ class Wristbound private constructor(context: Context) {
     @Volatile private var playing = false
     private val alerts = ReplyAlerts(state, ::alertPolicy, log = ::recordAlert) { deliverAlert(it) }
     private val audioDir = File(app.cacheDir, "audio").apply { mkdirs() }
+
+    /** Hermes' change broadcasts, so replies are found within seconds rather than at the next check. */
+    private val listener = ChangeListener(
+        scope,
+        open = { api()?.openListener() ?: throw IOException("Not signed in") },
+        onChange = { pollOnce() },
+        awake = { block -> awake(LISTEN_WAKE_MS) { block() } },
+    ).apply {
+        // Live or not decides how often the alarms check, so move the next one when it changes:
+        // a lost socket must not leave a 15-minute gap before the first fallback check.
+        onStateChanged = { s ->
+            Log.i(TAG, "live updates: $s")
+            if (s == Live.LIVE || s == Live.DOWN) synchronized(this@Wristbound) {
+                if (mode != Monitor.OFF) CheckAlarm.schedule(app, pollIntervalSeconds())
+            }
+        }
+    }
+
+    /** Whether replies reach the phone as they happen, for the setup screen. */
+    val liveUpdates: StateFlow<Live> get() = listener.state
 
     private data class Reply(val text: String, val audio: List<String>)
 
@@ -691,6 +712,8 @@ class Wristbound private constructor(context: Context) {
             if (wanted == Monitor.OFF) CheckAlarm.cancel(app) else CheckAlarm.schedule(app, FIRST_ALARM_SECONDS)
             mode = wanted
         }
+        val c = if (wanted == Monitor.OFF) null else api()
+        if (c == null) listener.stop() else listener.start(c)
         refreshService()
     }
 
@@ -709,6 +732,8 @@ class Wristbound private constructor(context: Context) {
         // an exact alarm is allowed to start a foreground service.
         updateMonitoring()
         try {
+            // The safety net also proves the listening socket still answers, or reopens it.
+            if (mode != Monitor.OFF) listener.ensure()
             withTimeoutOrNull(CHECK_TIMEOUT_MS) { pollOnce() }
         } finally {
             // Whatever went wrong in this check, the next one is always scheduled: an alarm that
@@ -721,12 +746,33 @@ class Wristbound private constructor(context: Context) {
 
     /** The network came back: catch up now rather than at the next check. */
     fun onNetworkBack() {
-        if (mode != Monitor.OFF) scope.launch { pollOnce() }
+        if (mode != Monitor.OFF) {
+            listener.kick()
+            scope.launch { pollOnce() }
+        }
     }
 
-    /** How often replies are checked right now: faster while the watchapp is open. */
-    fun pollIntervalSeconds(): Int =
-        if (watchOpen) minOf(settings.pollSeconds, FOREGROUND_POLL_SECONDS) else settings.pollSeconds
+    /**
+     * How often the alarms check right now. While Hermes' changes arrive live, only a slow safety
+     * net; otherwise the chosen interval, faster while the watchapp is open.
+     */
+    fun pollIntervalSeconds(): Int = when {
+        listener.live -> SAFETY_NET_SECONDS
+        watchOpen -> minOf(settings.pollSeconds, FOREGROUND_POLL_SECONDS)
+        else -> settings.pollSeconds
+    }
+
+    /** Run [block] with the CPU held awake, for at most [ms]. */
+    private suspend fun awake(ms: Long, block: suspend () -> Unit) {
+        val lock = app.getSystemService(PowerManager::class.java)
+            ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "wristbound:change")
+            ?.apply { acquire(ms) }
+        try {
+            block()
+        } finally {
+            if (lock?.isHeld == true) lock.release()
+        }
+    }
 
 
     /**
@@ -885,6 +931,9 @@ class Wristbound private constructor(context: Context) {
         private const val NEW_SESSION_TARGET = "\u0000new"
         private const val MAX_AUDIO_FILES = 24
         const val FOREGROUND_POLL_SECONDS = 30
+        /** The alarm checks' pace while changes arrive live: a backstop, not the way replies arrive. */
+        const val SAFETY_NET_SECONDS = 15 * 60
+        private const val LISTEN_WAKE_MS = 40_000L
         private const val FIRST_ALARM_SECONDS = 5
         private const val CHECK_TIMEOUT_MS = 30_000L
 
