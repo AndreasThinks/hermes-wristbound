@@ -6,20 +6,23 @@ on:
     paths:
       - 'site/**'
       - 'docs/screenshots/**'
+      - 'android/app/src/main/res/drawable-nodpi/hermes_girl.png'
+      - 'watch/resources/fonts/**'
       - '.github/workflows/pages.yml'
   pull_request:
     paths:
       - 'site/**'
+      - 'docs/screenshots/**'
+      - 'android/app/src/main/res/drawable-nodpi/hermes_girl.png'
+      - 'watch/resources/fonts/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
+  group: pages-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -34,6 +37,9 @@ jobs:
           path: _site
 
   deploy:
+    permissions:
+      pages: write
+      id-token: write
     if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest

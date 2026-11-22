@@ -40,4 +40,3 @@ Everything the watch app and its Android companion do today. For the Index plugi
 - Incoming replies do not autoplay. The optional **Play latest audio** Quick Launch action deliberately starts playback and may use the phone speaker when headphones are absent.
 
 Details are in [HERMES_API.md](HERMES_API.md).
-
