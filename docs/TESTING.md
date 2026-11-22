@@ -9,10 +9,10 @@ cd watch && pebble build
 # Companion: unit tests and debug APK
 cd android && ./gradlew testDebugUnitTest assembleDebug
 
-# Hermes for Index (Pebble plugin): unit tests
+# Index plugin (pebble-plugin): unit tests
 cd pebble-plugin && node --test test/*.test.js
 
-# wristbound-voice Hermes plugin: unit tests (no Hermes needed; fake TTS)
+# Voice plugin (wristbound-voice): unit tests (no Hermes needed; fake TTS)
 cd hermes-plugin && python -m pytest tests
 ```
 

@@ -6,8 +6,9 @@ Make Hermes usable from a Pebble watch while the phone stays locked and in a poc
 
 ## Chosen direction
 
-- Product name: **Hermes Wristbound**.
+- Product name: **Hermes Wristbound**, one product in three parts (see the [visual guide](BRAND.md) for naming).
 - A Pebble app paired with an Android companion.
+- An Index plugin so the Index ring can send to Hermes directly, and a Hermes voice plugin for spoken replies to those captures (added November 2026).
 - Android reaches Hermes privately over Tailscale.
 - Hermes remains authoritative for conversation history and execution.
 - Telegram-origin sessions are selectable through an include/exclude filter, not a separate Telegram client.

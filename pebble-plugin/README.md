@@ -1,8 +1,11 @@
-# Hermes plugin for Pebble (prototype)
+# Hermes Wristbound: Index plugin
+
+*One of the three parts of [Hermes Wristbound](../README.md). Listed in the Pebble Store as **Hermes for Index**, and shown in Index as **Hermes**. Experimental.*
 
 A [Pebble plugin](https://developer.repebble.com/guides/plugins/preview/) that makes Hermes an
 **agent destination**. Index and any plugin-aware watchface or app can then send to Hermes without the
-Wristbound watchapp, the companion APK or Telegram. It sits beside Wristbound; it does not replace it.
+Wristbound watch app, the companion APK or Telegram. It sits beside the watch app; it does not replace it. Add the
+[voice plugin](../hermes-plugin/README.md) and the watch app, and the answer to what you say to Index comes back as a spoken reply you play from the wrist.
 
 It runs as JavaScript inside the Pebble phone app (Android and iOS) and talks to the same Hermes
 dashboard as the companion ([docs/HERMES_API.md](../docs/HERMES_API.md)).

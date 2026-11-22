@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hermes Wristbound</title>
+  <meta name="description" content="Your Hermes Agent on your wrist: a Pebble watch app, an Index plugin and a Hermes voice plugin that work as one.">
+  <meta name="theme-color" content="#000000">
+  <meta property="og:title" content="Hermes Wristbound">
+  <meta property="og:description" content="Your Hermes Agent on your wrist. Talk to Hermes from a Pebble or the Index ring, and hear it answer.">
+  <meta property="og:image" content="assets/hermes-girl.png">
+  <link rel="icon" href="assets/wave.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="top">
+    <a class="brand" href="#" aria-label="Hermes Wristbound home">
+      <img src="assets/wave.svg" alt="" width="28" height="28">
+      <span class="pixel">Hermes Wristbound</span>
+    </a>
+    <nav aria-label="Main">
+      <a href="#parts">Parts</a>
+      <a href="#watch">Watch</a>
+      <a href="#setup">Setup</a>
+      <a href="https://github.com/AndreasThinks/hermes-wristbound">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="label">For Hermes Agent · Pebble · Index</p>
+        <h1>Your Hermes,<br>on your wrist.</h1>
+        <p class="lede">Talk to <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a> from a Pebble watch or the Index ring. Read its replies as they stream in, answer by voice, approve what it asks, and hear it speak, without taking your phone out.</p>
+        <div class="actions">
+          <a class="btn" href="https://github.com/AndreasThinks/hermes-wristbound/blob/main/docs/INSTALL.md">Install guide</a>
+          <a class="btn ghost" href="https://github.com/AndreasThinks/hermes-wristbound">Source on GitHub</a>
+        </div>
+        <p class="fine">Experimental. Runs against your own Hermes; nothing is hosted for you.</p>
+      </div>
+      <figure class="hero-art">
+        <img src="assets/hermes-girl.png" alt="The Hermes girl: a pixel-art portrait in green and violet, wearing headphones" width="606" height="708">
+      </figure>
+    </section>
+
+    <section id="parts" class="band">
+      <p class="label">One product, three parts</p>
+      <h2>Each works alone. Together, Hermes talks back.</h2>
+      <div class="parts">
+        <article class="part">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 2h8v3H8zM8 19h8v3H8zM6 5h12v2H6zM6 17h12v2H6zM5 7h2v10H5zM17 7h2v10h-2zM19 10h1v4h-1zM9 11h1v2H9zM11 9h1v6h-1zM13 10h1v4h-1z"/></svg>
+          <p class="where">Pebble + Android</p>
+          <h3>Watch app</h3>
+          <p>The full Hermes client on the wrist, with its Android companion. Browse sessions, read conversations as they stream in, reply by dictation or a quick answer, approve steps, and play Hermes' audio on headphones, the phone or the watch speaker.</p>
+          <a href="https://apps.repebble.com/22984baa50dd4b68ba9a0945">Pebble Store</a>
+        </article>
+        <article class="part">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 4h16v2H4zM2 6h2v10H2zM20 6h2v10h-2zM4 16h6v2H4zM14 16h6v2h-6zM8 18h2v2H8zM6 20h2v2H6zM7 10h2v2H7zM11 10h2v2h-2zM15 10h2v2h-2z"/></svg>
+          <p class="where">Pebble app · Android and iOS</p>
+          <h3>Index plugin</h3>
+          <p>Makes Hermes an agent for the Index ring and any plugin-aware app. Say <q>Tell Hermes&nbsp;…</q> and the message goes straight to your Hermes: no Telegram, no watch app needed. Tick <em>Reply with voice</em> to have it answered out loud.</p>
+          <a href="https://apps.repebble.com/77caeb14dc3f4d3c8367ab82">Pebble Store</a>
+        </article>
+        <article class="part voice">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M2 10h2v4H2zM6 7h2v10H6zM10 3h2v18h-2zM14 6h2v12h-2zM18 9h2v6h-2zM22 11h1v2h-1z"/></svg>
+          <p class="where">Your Hermes host</p>
+          <h3>Voice plugin</h3>
+          <p>A small Hermes plugin, <code>wristbound-voice</code>, that speaks the reply to what you just dictated with your own Hermes text-to-speech, the way <code>/voice</code> does, and keeps the clip so the watch can play it. No modified Hermes.</p>
+          <a href="https://github.com/AndreasThinks/hermes-wristbound/tree/main/hermes-plugin">Install with one command</a>
+        </article>
+      </div>
+    </section>
+
+    <section class="band flow-band" aria-labelledby="flow-title">
+      <p class="label">How it fits</p>
+      <h2 id="flow-title">Say it to Index. Feel it on your wrist.</h2>
+      <ol class="flow">
+        <li><span class="step">01</span><b>Index</b><span>You say <q>Tell Hermes to check the train times.</q></span></li>
+        <li><span class="step">02</span><b>Index plugin</b><span>Sends it to your Hermes dashboard over your tailnet.</span></li>
+        <li class="v"><span class="step">03</span><b>Hermes + voice plugin</b><span>Hermes answers; the plugin speaks the answer.</span></li>
+        <li class="v"><span class="step">04</span><b>Companion</b><span>Hears the change live and fetches the reply and its clip.</span></li>
+        <li><span class="step">05</span><b>Watch</b><span>Buzzes once, dot dot dash, with <em>Play</em>.</span></li>
+      </ol>
+      <p class="note">Hermes stays in charge of every session, turn and audio file. Wristbound keeps no conversation store of its own, and the watch never holds a password. Telegram, desktop and CLI sessions show up too, and you can continue them from the watch.</p>
+    </section>
+
+    <section id="watch" class="band">
+      <p class="label">On the watch</p>
+      <h2>Black glass. Green to act. Violet when Hermes speaks.</h2>
+      <div class="screens">
+        <figure><div class="bezel"><img src="assets/screens/home.png" alt="Home: New session, Recent audio, Sessions" width="144" height="168"></div><figcaption>Home</figcaption></figure>
+        <figure><div class="bezel"><img src="assets/screens/working.png" alt="A reply streaming into the conversation as Hermes writes it" width="144" height="168"></div><figcaption>Streaming reply</figcaption></figure>
+        <figure><div class="bezel"><img src="assets/screens/banner.png" alt="A new audio reply as a banner over the lower part of the screen, with an AUDIO tag" width="144" height="168"></div><figcaption>Reply banner</figcaption></figure>
+        <figure><div class="bezel"><img src="assets/screens/actions.png" alt="Reply actions: Play on headphones, Play on phone speaker, Replay from start" width="144" height="168"></div><figcaption>Play anywhere</figcaption></figure>
+        <figure><div class="bezel round"><img src="assets/screens/chalk-session.png" alt="A conversation on the round Pebble Time Round" width="180" height="180"></div><figcaption>Round, too</figcaption></figure>
+      </div>
+      <p class="caption">Pebble Time and Pebble Time Round emulators; the conversation is canned.</p>
+    </section>
+
+    <section class="band" aria-labelledby="feel-title">
+      <p class="label">Feel</p>
+      <h2 id="feel-title">Know what arrived without looking.</h2>
+      <p class="note">Every kind of event has its own vibration.</p>
+      <ul class="haptics">
+        <li><span class="pattern" aria-hidden="true"><i style="--w:50"></i></span><b>Text reply</b><span>dot</span></li>
+        <li class="v"><span class="pattern" aria-hidden="true"><i style="--w:50"></i><s style="--w:100"></s><i style="--w:50"></i><s style="--w:100"></s><i style="--w:250"></i></span><b>Reply with audio</b><span>dot dot dash</span></li>
+        <li class="warn"><span class="pattern" aria-hidden="true"><i style="--w:250"></i><s style="--w:150"></s><i style="--w:250"></i><s style="--w:150"></s><i style="--w:250"></i></span><b>Needs you</b><span>dash dash dash</span></li>
+        <li><span class="pattern" aria-hidden="true"><i style="--w:30"></i><s style="--w:60"></s><i style="--w:30"></i></span><b>Sent</b><span>double blip</span></li>
+      </ul>
+    </section>
+
+    <section id="setup" class="band">
+      <p class="label">Pick your setup</p>
+      <h2>Start with the part you want.</h2>
+      <div class="setup">
+        <div class="row"><p><b>Hermes on the watch</b>Sessions, replies, audio and approvals.</p><p class="need">Watch app + Android companion</p></div>
+        <div class="row"><p><b>Talk to Hermes from Index</b>On Android or iOS.</p><p class="need">Index plugin</p></div>
+        <div class="row v"><p><b>Spoken answers on the wrist</b>Say it to Index, play the answer from the watch.</p><p class="need">All three</p></div>
+      </div>
+      <p class="note">Every part signs in to your own Hermes dashboard, reached privately, for example over Tailscale. The <a href="https://github.com/AndreasThinks/hermes-wristbound/blob/main/docs/INSTALL.md">install guide</a> walks through each step.</p>
+      <pre class="cmd"><span class="pixel">On your Hermes host</span>
+hermes plugins install AndreasThinks/hermes-wristbound/hermes-plugin/wristbound-voice --enable</pre>
+    </section>
+
+    <section class="band status" aria-labelledby="status-title">
+      <p class="label">Status</p>
+      <h2 id="status-title">Experimental, and honest about it.</h2>
+      <ul class="plain">
+        <li>Session browsing, replies and headphone playback have been used on a Pixel 9a, a Pebble Time 2 and Hermes 0.22.2. The Index plugin has been used on a Pixel with Index.</li>
+        <li>Newer paths, such as live updates, voice replies and watch-speaker playback, pass automated and emulator tests and still need checks on real hardware.</li>
+        <li>The Android companion is a sideloaded APK. There is no iOS companion yet; the Index plugin is built for iOS but untested there.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p><span class="pixel">Hermes Wristbound</span> is an independent project for <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a> and <a href="https://repebble.com">Pebble</a>, not affiliated with either.</p>
+    <p><a href="https://github.com/AndreasThinks/hermes-wristbound">GitHub</a> · <a href="https://github.com/AndreasThinks/hermes-wristbound/blob/main/docs/BRAND.md">Visual guide</a> · <a href="https://github.com/AndreasThinks/hermes-wristbound/issues">Report a bug</a></p>
+  </footer>
+</body>
+</html>
