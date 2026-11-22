@@ -15,6 +15,7 @@ function socketClass(handlers, log) {
   return class FakeSocket {
     constructor(url) {
       this.url = url; log.push({ open: url });
+      if (handlers.ready === 'hang') return;
       setImmediate(() => this.onmessage({ data: JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'gateway.ready' } }) }));
     }
     send(raw) {
@@ -25,6 +26,7 @@ function socketClass(handlers, log) {
         if (!handler) return this.onclose({ code: 1006 });
         const out = handler(frame.params, this);
         if (out === 'drop') return this.onclose({ code: 1006 });
+        if (out === 'hang') return;
         this.onmessage({ data: JSON.stringify(out.error ? { jsonrpc: '2.0', id: frame.id, error: out.error } : { jsonrpc: '2.0', id: frame.id, result: out }) });
       });
     }
@@ -32,7 +34,7 @@ function socketClass(handlers, log) {
   };
 }
 
-function fixture({ routes = {}, gateway = {}, now = 1_800_000_000_000 } = {}) {
+function fixture({ routes = {}, gateway = {}, now = 1_800_000_000_000, timeouts } = {}) {
   const secure = new Map(), local = new Map(), calls = [], socketLog = [];
   const clock = { now };
   const allRoutes = {
@@ -81,6 +83,7 @@ function fixture({ routes = {}, gateway = {}, now = 1_800_000_000_000 } = {}) {
     secure: { getItem: async (k) => secure.get(k) ?? null, setItem: async (k, v) => { secure.set(k, v); }, removeItem: async (k) => { secure.delete(k); } },
     local: { getItem: (k) => local.has(k) ? local.get(k) : null, setItem: (k, v) => local.set(k, String(v)), removeItem: (k) => local.delete(k) },
     fetch, WebSocket: socketClass(gatewayHandlers, socketLog), crypto: crypto.webcrypto, now: () => clock.now,
+    timeouts: timeouts || { ready: 30, call: 30, submit: 30 },
   });
   f.signIn = () => f.service.config({ type: 'connect', base: 'hermes.tail1234.ts.net:10443', username: 'andreas', password: 'pw', auth_entropy: Array.from({ length: 56 }, (_, i) => i) });
   return f;
@@ -408,3 +411,77 @@ test('signing out removes credentials', async () => {
   assert.equal(f.secure.size, 0);
   await assert.rejects(f.service.action({ action: 'send_to_agent', args: { message: 'x' } }), (e) => e.code === 'AUTH_REQUIRED');
 });
+
+test('a gateway that never says ready times out as "not sent"', async () => {
+  const f = fixture({ gateway: { ready: 'hang' } });
+  await f.signIn();
+  await assert.rejects(f.service.action({ action: 'send_to_agent', args: { message: 'x' } }),
+    (e) => e.code === 'PLUGIN_UNAVAILABLE' && /not sent/.test(e.message));
+  assert.equal(f.socketLog.filter((x) => x.method === 'prompt.submit').length, 0);
+  assert.ok(f.socketLog.some((x) => x.close), 'the socket is closed');
+});
+
+test('a stalled session.resume times out as "not sent"', async () => {
+  const f = fixture({ gateway: { 'session.resume': () => 'hang' } });
+  await f.signIn();
+  await assert.rejects(f.service.action({ action: 'send_to_agent', args: { message: 'x', chat_id: 'Groceries' } }),
+    (e) => e.code === 'PLUGIN_UNAVAILABLE' && /not sent/.test(e.message));
+  assert.equal(f.socketLog.filter((x) => x.method === 'prompt.submit').length, 0);
+});
+
+test('an unconfirmed prompt.submit times out as uncertain and is never resent', async () => {
+  const f = fixture({ gateway: { 'prompt.submit': () => 'hang' } });
+  await f.signIn();
+  await assert.rejects(f.service.action({ action: 'send_to_agent', args: { message: 'x' } }),
+    (e) => e.code === 'UNKNOWN' && /before sending again/.test(e.message));
+  assert.equal(f.socketLog.filter((x) => x.method === 'prompt.submit').length, 1);
+});
+
+const CANCEL = 'DELETE /api/plugins/wristbound-voice/arms/7';
+
+test('a voice capture to a known chat arms that chat, and a send that never went cancels the arm', async () => {
+  const armed = [], cancelled = [];
+  const f = fixture({
+    routes: {
+      [ARM]: (init) => { armed.push(JSON.parse(init.body)); return json({ armed: true, arm_id: 7, expires_at: 1 }); },
+      [CANCEL]: () => { cancelled.push(7); return json({ cancelled: true }); },
+    },
+    gateway: { 'session.resume': () => 'hang' },
+  });
+  await f.signIn();
+  await f.service.config({ type: 'voiceReplies', value: true });
+  await assert.rejects(f.service.action({ action: 'send_to_agent', args: { message: 'hello', chat_id: 'Groceries' } }), /not sent/);
+  assert.deepEqual(armed, [{ text: 'hello', session_id: 's-groceries' }]);
+  assert.deepEqual(cancelled, [7]);
+});
+
+test('an uncertain voice send keeps its arm: Hermes may still run it', async () => {
+  const cancelled = [];
+  const f = fixture({
+    routes: {
+      [ARM]: () => json({ armed: true, arm_id: 7 }),
+      [CANCEL]: () => { cancelled.push(7); return json({ cancelled: true }); },
+    },
+    gateway: { 'prompt.submit': () => 'drop' },
+  });
+  await f.signIn();
+  await f.service.config({ type: 'voiceReplies', value: true });
+  await assert.rejects(f.service.action({ action: 'send_to_agent', args: { message: 'hello' } }), /before sending again/);
+  assert.deepEqual(cancelled, []);
+});
+
+test('a declined prompt cancels its arm', async () => {
+  const cancelled = [];
+  const f = fixture({
+    routes: {
+      [ARM]: () => json({ armed: true, arm_id: 7 }),
+      [CANCEL]: () => { cancelled.push(7); return json({ cancelled: true }); },
+    },
+    gateway: { 'prompt.submit': () => ({ status: 'rejected' }) },
+  });
+  await f.signIn();
+  await f.service.config({ type: 'voiceReplies', value: true });
+  await assert.rejects(f.service.action({ action: 'send_to_agent', args: { message: 'hello' } }), /declined/);
+  assert.deepEqual(cancelled, [7]);
+});
+

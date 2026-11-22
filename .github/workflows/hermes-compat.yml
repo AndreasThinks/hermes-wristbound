@@ -1,0 +1,38 @@
+name: Hermes compatibility
+
+# Wristbound depends on Hermes dashboard internals (routes, native sign-in, the /api/ws gateway,
+# plugin hooks) that are not a versioned API. Once a week, check the latest Hermes still offers
+# them, so a breaking change shows up here before it shows up on a wrist.
+on:
+  schedule:
+    - cron: '17 6 * * 1'   # Mondays, 06:17 UTC
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: hermes-agent branch, tag or commit
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Fetch Hermes Agent
+        env:
+          HERMES_REF: ${{ inputs.ref || 'main' }}
+        run: |
+          git clone --quiet --filter=blob:none https://github.com/NousResearch/hermes-agent "$RUNNER_TEMP/hermes"
+          git -C "$RUNNER_TEMP/hermes" checkout --quiet "$HERMES_REF"
+      - name: Check what Wristbound relies on
+        run: python .github/scripts/hermes_contract.py "$RUNNER_TEMP/hermes"
+      - name: Voice plugin tests
+        working-directory: hermes-plugin
+        run: |
+          pip install pytest fastapi httpx
+          python -m pytest -q tests

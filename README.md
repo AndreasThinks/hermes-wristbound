@@ -80,7 +80,7 @@ Every part shares one look, **Phosphor**: black glass, **green `#00FFAA`** for a
 
 ## Status
 
-**Experimental.** Current versions in this repository: watch app 0.6.8, Android companion 0.6.12, Index plugin 0.1.7, voice plugin 0.1.1. Session browsing, replies and phone/headphone playback have been used on a Pixel 9a with Hermes 0.22.2 and a Pebble Time 2; the Index plugin has been used on a Pixel with Index. Newer paths (native notification actions, live updates, voice replies, watch-speaker playback) pass automated and emulator tests and still need hardware checks, listed in [Testing](docs/TESTING.md). The companion is a sideloaded APK, not a Play Store app, and there is no iOS companion. Release notes are in [docs/](docs/); [Releasing](docs/RELEASING.md) covers how a GitHub release builds and publishes every part.
+**Experimental.** Current versions in this repository: watch app 0.6.8, Android companion 0.6.12, Index plugin 0.1.8, voice plugin 0.2.0. Session browsing, replies and phone/headphone playback have been used on a Pixel 9a with Hermes 0.22.2 and a Pebble Time 2; the Index plugin has been used on a Pixel with Index. Newer paths (native notification actions, live updates, voice replies, watch-speaker playback) pass automated and emulator tests and still need hardware checks, listed in [Testing](docs/TESTING.md). The companion is a sideloaded APK, not a Play Store app, and there is no iOS companion. Release notes are in [docs/](docs/); [Releasing](docs/RELEASING.md) covers how a GitHub release builds and publishes every part.
 
 ## Develop
 
@@ -91,7 +91,7 @@ cd pebble-plugin && node --test test/*.test.js && pebble build   # Index plugin
 cd hermes-plugin && pip install pytest fastapi httpx && python -m pytest tests   # voice plugin
 ```
 
-CI runs all four on every pull request and attaches the `.pbw` files and the debug APK as artifacts. The [website](site/) deploys from `main`. To click through the watch UI without a phone or Hermes, see [Testing](docs/TESTING.md).
+CI runs all four on every pull request and attaches the `.pbw` files and the debug APK as artifacts. Once a week a [compatibility check](.github/workflows/hermes-compat.yml) reads the latest Hermes source and fails if a route, gateway method, hook or table Wristbound relies on has moved. The [website](site/) deploys from `main`. To click through the watch UI without a phone or Hermes, see [Testing](docs/TESTING.md).
 
 | Path | What's there |
 |------|--------------|
@@ -116,4 +116,4 @@ Replacing Hermes, rebuilding Telegram, changing Ringbearer's working ingress, or
 
 ## License
 
-No license has been selected yet. Public visibility does not grant an open-source license.
+[MIT](LICENSE). The Silkscreen font in the watch app is under the SIL Open Font License ([watch/resources/fonts/OFL.txt](watch/resources/fonts/OFL.txt)).

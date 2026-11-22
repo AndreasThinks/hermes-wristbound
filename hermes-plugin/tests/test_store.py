@@ -89,3 +89,54 @@ def test_prune_removes_old_clips(home, tmp_path):
     assert not path.exists()
     assert store.clip_file(clip_id) is None
     assert store.replies("s1", now=100 + CLIP_TTL + 2) == []
+
+
+def test_plain_words_in_front_do_not_match(home):
+    store = VoiceStore(home)
+    store.arm("yes", now=100)
+    assert not store.take_arm("please answer yes", now=101)
+    assert not store.take_arm("no not yet, yes", now=101)
+    assert store.take_arm("Andreas: yes", now=102)
+
+
+def test_a_session_arm_matches_only_that_session_and_wins(home):
+    store = VoiceStore(home)
+    store.arm("hello", session_id="s1", now=100)
+    assert not store.take_arm("hello", session_id="s2", now=101)  # another chat: no
+    store.arm("hello", now=102)  # a new-session capture: any chat
+    assert store.take_arm("hello", session_id="s1", now=103)  # s1 uses its own arm first...
+    assert store.take_arm("hello", session_id="s2", now=104)  # ...so the general one is still there
+    assert not store.take_arm("hello", session_id="s1", now=105)
+
+
+def test_a_cancelled_arm_never_matches(home):
+    store = VoiceStore(home)
+    arm_id, expires = store.arm("turn the lights off", now=100)
+    assert expires == 100 + ARM_TTL
+    assert store.cancel_arm(arm_id)
+    assert not store.cancel_arm(arm_id)
+    assert not store.take_arm("turn the lights off", now=101)
+
+
+def test_a_used_arm_cannot_be_cancelled(home):
+    store = VoiceStore(home)
+    arm_id, _ = store.arm("hi", now=100)
+    assert store.take_arm("hi", now=101)
+    assert not store.cancel_arm(arm_id)
+
+
+def test_a_0_1_store_gains_the_session_column(home):
+    import sqlite3
+    home.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(home / "voice.db") as conn:
+        conn.execute("CREATE TABLE arms (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, created_at REAL NOT NULL, used_at REAL)")
+        conn.execute("INSERT INTO arms(text, created_at) VALUES ('old', 100)")
+    store = VoiceStore(home)
+    assert store.take_arm("old", session_id="s1", now=101)
+
+
+
+def test_a_chat_continued_in_a_new_session_still_matches(home):
+    store = VoiceStore(home)
+    store.arm("summarise", session_id="s1", now=100)
+    assert store.take_arm("summarise", session_id="s1-compressed", parent_session_id="s1", now=101)

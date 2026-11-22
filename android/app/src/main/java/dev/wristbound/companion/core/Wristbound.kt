@@ -109,6 +109,8 @@ class Wristbound private constructor(context: Context) {
         open = { api()?.openListener() ?: throw IOException("Not signed in") },
         onChange = { pollOnce() },
         awake = { block -> awake(LISTEN_WAKE_MS) { block() } },
+        // Quick while someone is looking at the watch or waiting on a turn; spaced out otherwise.
+        minGapMs = { if (watchOpen || activeTurns.isNotEmpty()) 0L else ChangeListener.BUSY_GAP_MS },
     ).apply {
         // Live or not decides how often the alarms check, so move the next one when it changes:
         // a lost socket must not leave a 15-minute gap before the first fallback check.
@@ -214,9 +216,10 @@ class Wristbound private constructor(context: Context) {
                     watch.send(WatchCodec.status(Protocol.Conn.ERROR, "Update watch or phone app"))
                 }
                 // Watch options live here now; the watch's earlier choice stands until one is made.
-                val quick = settings.quickLaunch
-                if (quick == null) cmd.quickLaunch?.let { settings.quickLaunch = it }
-                else watch.send(WatchCodec.config(quick))
+                val plan = QuickLaunchSync.onHello(settings.quickLaunch, cmd.quickLaunch)
+                plan.adopt?.let { settings.quickLaunch = it }
+                plan.confirmed?.let { confirmQuickLaunch(it) }
+                plan.send?.let { sendQuickLaunch(it) }
                 watch.send(WatchCodec.audioRoute(playback.hasPrivateOutput()))
                 // Before the session list: that waits on Hermes, and the user is looking at the
                 // watch for this reply now. A stale request (the launch failed long ago) is dropped.
@@ -555,16 +558,23 @@ class Wristbound private constructor(context: Context) {
         val text = listOf(r.description, r.command).filter { it.isNotBlank() }.distinct().joinToString("\n")
             .ifBlank { "Hermes wants to go ahead" }
         if (watchOpen && watchApproves &&
-            watch.send(WatchCodec.approval(open.sessionId, r.id, open.title, Text.forWatch(text), r.choices, closed = false, textBudget))
+            watch.send(WatchCodec.approval(open.sessionId, r.id, open.title, Text.forWatch(text), r.wristChoices, closed = false, textBudget))
         ) {
             notifier.clearApproval(r.id)
             return
         }
-        notifier.approval(open.sessionId, r.id, open.title, Text.forWatch(text), r.choices)
+        notifier.approval(open.sessionId, r.id, open.title, Text.forWatch(text), r.wristChoices)
     }
 
     /** The user's answer, from the watch or a notification action. False if Hermes no longer waits. */
     suspend fun answerApproval(requestId: String, choice: String): Boolean {
+        // Only what the watch and notification offer: an older watchapp, or a stale notification,
+        // cannot allow a command for the session or for good. Hermes keeps waiting for the desktop.
+        val pending = approvals[requestId] ?: return false
+        if (choice !in pending.request.wristChoices) {
+            submitState(pending.sessionId, Protocol.Submit.WORKING, "Answer that on the desktop")
+            return false
+        }
         val open = approvals.remove(requestId) ?: return false
         notifier.clearApproval(requestId)
         val sent = open.answer(choice)
@@ -684,11 +694,32 @@ class Wristbound private constructor(context: Context) {
         }
     }
 
+    private val _quickLaunch = MutableStateFlow(QuickLaunchSync.status(settings.quickLaunch, settings.quickLaunchOnWatch))
+
+    /** Whether the Quick Launch choice made here has reached the watch, for the setup screen. */
+    val quickLaunch: StateFlow<QuickLaunchSync.Status> = _quickLaunch
+
+    private fun confirmQuickLaunch(onWatch: Int?) {
+        settings.quickLaunchOnWatch = onWatch
+        _quickLaunch.value = QuickLaunchSync.status(settings.quickLaunch, onWatch)
+    }
+
+    /** Send the Quick Launch choice; it counts as applied only once the watch acknowledges it. */
+    private suspend fun sendQuickLaunch(choice: Int) {
+        if (watch.send(WatchCodec.config(choice)) && settings.quickLaunch == choice) confirmQuickLaunch(choice)
+    }
+
+    /** The Quick Launch choice changed in the companion app: pending until the watch confirms it. */
+    fun onQuickLaunchChanged(choice: Int) {
+        settings.quickLaunch = choice
+        _quickLaunch.value = QuickLaunchSync.status(choice, settings.quickLaunchOnWatch)
+        if (watchOpen) scope.launch { sendQuickLaunch(choice) }
+    }
+
     /** A watch option changed in the companion app: tell an open watchapp now. */
     fun onWatchSettingsChanged() {
         if (!watchOpen) return
         scope.launch {
-            settings.quickLaunch?.let { watch.send(WatchCodec.config(it)) }
             pushSessions()
             sendAudioPages(state.loadAudio())
         }

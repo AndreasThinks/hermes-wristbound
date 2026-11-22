@@ -23,7 +23,7 @@ def client(home):
 
 def test_capabilities(client):
     c, _ = client
-    assert c.get("/api/plugins/wristbound-voice/capabilities").json() == {"plugin": "wristbound-voice", "version": 1}
+    assert c.get("/api/plugins/wristbound-voice/capabilities").json() == {"plugin": "wristbound-voice", "version": 2}
 
 
 def test_arm_then_replies_then_clip(client, tmp_path):
@@ -48,3 +48,13 @@ def test_bad_requests(client):
     assert c.get("/api/plugins/wristbound-voice/clips/..%2Fvoice.db").status_code == 404
     assert c.get("/api/plugins/wristbound-voice/clips/" + "0" * 24).status_code == 404
     assert c.get("/api/plugins/wristbound-voice/sessions/none/replies").json()["replies"] == []
+
+
+def test_an_arm_for_a_chat_can_be_cancelled(client):
+    c, module = client
+    r = c.post("/api/plugins/wristbound-voice/arm", json={"text": "lights off", "session_id": "s1"}).json()
+    assert isinstance(r["arm_id"], int)
+    assert c.delete(f"/api/plugins/wristbound-voice/arms/{r['arm_id']}").json() == {"cancelled": True}
+    assert not module.store().take_arm("lights off", session_id="s1")
+    assert c.get("/api/plugins/wristbound-voice/capabilities").json()["version"] == 2
+

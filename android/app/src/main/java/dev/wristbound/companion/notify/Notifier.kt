@@ -128,10 +128,22 @@ class Notifier(private val context: Context) {
             .setOnlyAlertOnce(true)
             .setAutoCancel(true)
             .setContentIntent(openApp())
+            // The command stays off the lock screen; this stand-in shows there instead.
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, CH_APPROVALS)
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setColor(ContextCompat.getColor(context, R.color.phosphor_signal))
+                    .setContentTitle("Hermes is asking before a step")
+                    .setContentText("Unlock to see it, or answer on the watch")
+                    .build(),
+            )
         for (choice in choices) {
             val label = APPROVAL_LABELS[choice] ?: continue
+            // On the phone, answering needs an unlocked screen. The Pebble's mirrored actions
+            // still work, since its app sends them directly rather than through the lock screen.
             builder.addAction(NotificationCompat.Action.Builder(0, label, action(ActionReceiver.ACTION_APPROVE, sessionId, requestId, choice))
-                .setShowsUserInterface(false).build())
+                .setShowsUserInterface(false).setAuthenticationRequired(true).build())
         }
         return post(requestId.hashCode(), builder.build())
     }

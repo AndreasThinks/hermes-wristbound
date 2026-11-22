@@ -37,9 +37,10 @@ class ChangeListenerTest {
         fun emit(type: String) = channel.trySend(GatewayEvent(type, null, JsonObject(emptyMap())))
     }
 
-    private class Rig(scope: TestScope, val failures: MutableList<Exception> = mutableListOf()) {
+    private class Rig(scope: TestScope, val failures: MutableList<Exception> = mutableListOf(), gapMs: Long = 0L) {
         val sockets = mutableListOf<FakeSocket>()
         var checks = 0
+        val checkTimes = mutableListOf<Long>()
         val states = mutableListOf<Live>()
         val listener = ChangeListener(
             scope.backgroundScope,
@@ -47,7 +48,9 @@ class ChangeListenerTest {
                 failures.removeFirstOrNull()?.let { throw it }
                 FakeSocket().also { sockets += it }
             },
-            onChange = { checks++ },
+            onChange = { checks++; checkTimes += scope.testScheduler.currentTime },
+            minGapMs = { gapMs },
+            now = { scope.testScheduler.currentTime },
         ).apply { onStateChanged = { states += it } }
     }
 
@@ -64,6 +67,28 @@ class ChangeListenerTest {
         rig.sockets[0].emit("skin.changed")
         advanceTimeBy(ChangeListener.DEBOUNCE_MS + 1)
         assertEquals(2, rig.checks)
+    }
+
+    @Test
+    fun changesWhileBusyAreSpacedOutButTheLastIsNeverDropped() = runTest {
+        val rig = Rig(this, gapMs = ChangeListener.BUSY_GAP_MS)
+        rig.listener.start("client")
+        runCurrent()
+        advanceTimeBy(ChangeListener.DEBOUNCE_MS + 1)
+        assertEquals("connecting catches up once", 1, rig.checks)
+
+        // Hermes busy for a minute: a change every 2 s.
+        repeat(30) { rig.sockets[0].emit(ChangeListener.SESSIONS_CHANGED); advanceTimeBy(2_000) }
+        val lastChange = testScheduler.currentTime - 2_000
+        advanceTimeBy(ChangeListener.BUSY_GAP_MS + ChangeListener.DEBOUNCE_MS + 1)
+        val busy = rig.checkTimes.drop(1)
+        assertTrue("checks at least a gap apart: $busy", busy.zipWithNext().all { (a, b) -> b - a >= ChangeListener.BUSY_GAP_MS })
+        assertTrue("at most one check per gap, got ${busy.size}", busy.size <= 60_000 / ChangeListener.BUSY_GAP_MS + 1)
+        // The turn's last change is never dropped: a check runs after it.
+        assertTrue("a check after the last change at $lastChange: $busy", busy.last() > lastChange)
+        val settled = rig.checks
+        advanceTimeBy(5 * ChangeListener.BUSY_GAP_MS)
+        assertEquals("nothing more without a change", settled, rig.checks)
     }
 
     @Test

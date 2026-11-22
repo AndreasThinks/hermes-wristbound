@@ -14,7 +14,7 @@ def fake_tts(calls):
     return synthesize
 
 
-def hooks(home, calls, find=lambda s, r: "7"):
+def hooks(home, calls, find=lambda s, r, since=None: "7"):
     return VoiceHooks(VoiceStore(home), synthesize=fake_tts(calls), find_message=find, background=False)
 
 
@@ -55,7 +55,7 @@ def test_only_the_capture_just_dictated_is_spoken(home):
 def test_tts_failure_marks_the_turn_failed_without_raising(home):
     def broken(text, directory):
         raise RuntimeError("no TTS provider configured")
-    h = VoiceHooks(VoiceStore(home), synthesize=broken, find_message=lambda s, r: "7", background=False)
+    h = VoiceHooks(VoiceStore(home), synthesize=broken, find_message=lambda s, r, since=None: "7", background=False)
     h.store.arm("hello")
     h.pre_llm_call(session_id="s1", turn_id="t1", user_message="hello")
     h.post_llm_call(session_id="s1", turn_id="t1", assistant_response="Hi!")
@@ -93,22 +93,58 @@ def test_background_speech_runs_off_the_turn_thread(home):
         out = Path(directory) / "r.mp3"
         out.write_bytes(b"x")
         return [out]
-    h = VoiceHooks(VoiceStore(home), synthesize=synth, find_message=lambda s, r: "1", background=True)
+    h = VoiceHooks(VoiceStore(home), synthesize=synth, find_message=lambda s, r, since=None: "1", background=True)
     h.store.arm("hello")
     h.pre_llm_call(session_id="s1", turn_id="t1", user_message="hello")
     h.post_llm_call(session_id="s1", turn_id="t1", assistant_response="Hi!")
     assert done.wait(5) and seen == ["wristbound-voice"]
 
 
-def test_find_message_reads_the_saved_assistant_row(tmp_path):
+def _db(tmp_path):
     db = tmp_path / "state.db"
     with sqlite3.connect(db) as conn:
-        conn.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT)")
-        conn.executemany("INSERT INTO messages(id, session_id, role, content) VALUES (?,?,?,?)", [
-            (1, "s1", "user", "hi"), (2, "s1", "assistant", "Hello!"), (3, "s1", "user", "again"),
-            (4, "s1", "assistant", "Hello again!"), (5, "s2", "assistant", "other chat")])
+        conn.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp REAL)")
+        conn.executemany("INSERT INTO messages(id, session_id, role, content, timestamp) VALUES (?,?,?,?,?)", [
+            (1, "s1", "user", "hi", 100), (2, "s1", "assistant", "Hello!", 101), (3, "s1", "user", "again", 200),
+            (4, "s1", "assistant", "Hello again!", 201), (5, "s2", "assistant", "other chat", 202)])
+    return db
+
+
+def test_find_message_reads_the_saved_assistant_row(tmp_path):
+    db = _db(tmp_path)
     assert hermes_find_message("s1", "Hello!", db=db) == "2"
-    assert hermes_find_message("s1", "Hello again!\n", db=db) == "4"
-    assert hermes_find_message("s1", "not saved verbatim", db=db) == "4"
+    assert hermes_find_message("s1", "Hello again!\n", since=200, db=db) == "4"
     assert hermes_find_message("s3", "x", db=db) is None
     assert hermes_find_message("s1", "x", db=tmp_path / "missing.db") is None
+
+
+def test_find_message_never_binds_a_clip_to_an_older_reply(tmp_path):
+    db = _db(tmp_path)
+    # The turn's own row, rewritten by a transform hook: still this turn's newest row.
+    assert hermes_find_message("s1", "not saved verbatim", since=200, db=db) == "4"
+    # The turn wrote no row yet: nothing, rather than the previous reply.
+    assert hermes_find_message("s1", "not saved verbatim", since=300, db=db) is None
+    # No start time to go by: a mismatch binds nothing.
+    assert hermes_find_message("s1", "not saved verbatim", db=db) is None
+    # An older reply with the same words is not this turn's.
+    assert hermes_find_message("s1", "Hello!", since=200, db=db) == "4"
+
+
+def test_post_llm_call_passes_the_turn_start(home):
+    seen = []
+    h = hooks(home, [], find=lambda s, r, since=None: seen.append(since) or "9")
+    h.store.arm("hello")
+    h.pre_llm_call(session_id="s1", turn_id="t1", user_message="hello")
+    h.post_llm_call(session_id="s1", turn_id="t1", assistant_response="Hi!")
+    assert seen and seen[0] is not None
+
+
+def test_an_arm_for_one_chat_does_not_speak_another(home):
+    calls = []
+    h = hooks(home, calls)
+    h.store.arm("status please", session_id="s-index")
+    h.pre_llm_call(session_id="s-telegram", turn_id="t1", user_message="status please")
+    h.post_llm_call(session_id="s-telegram", turn_id="t1", assistant_response="All quiet.")
+    h.pre_llm_call(session_id="s-index", turn_id="t2", user_message="status please")
+    h.post_llm_call(session_id="s-index", turn_id="t2", assistant_response="All quiet here too.")
+    assert calls == ["All quiet here too."]
