@@ -267,6 +267,53 @@ test('latest destination skips messaging chats if read-only and never guesses wh
   assert.equal(f.socketLog.filter(x => x.method === 'session.create').length, 0);
 });
 
+test('spoken replies capability selects reply_format on the normal prompt.submit', async () => {
+  const f = fixture({ routes: {
+    'GET /api/index-spoken-replies/capabilities': () => json({ spoken_replies: true, protocol: 2 }),
+  } });
+  const initial = await f.service.config({ type: 'status' });
+  assert.equal(initial.spokenReplies, false);
+  await f.signIn();
+  await f.service.action({ action: 'send_to_agent', args: { message: 'default' } });
+  assert.deepEqual(f.socketLog.find(x => x.method === 'prompt.submit').params,
+    { session_id: 'rt-new', text: 'default', queued: true });
+  await f.service.config({ type: 'spokenReplies', value: true });
+  const receipt = await f.service.action({ action: 'send_to_agent', args: { message: 'spoken' } });
+  assert.match(receipt.text, /Sent to a new Hermes session/);
+  const submits = f.socketLog.filter(x => x.method === 'prompt.submit');
+  assert.equal(submits.length, 2);
+  assert.deepEqual(submits[1].params,
+    { session_id: 'rt-new', text: 'spoken', queued: false, reply_format: 'text_and_audio' });
+});
+
+test('unsupported capability falls back to exactly one text-only prompt.submit', async () => {
+  const f = fixture({ routes: {
+    'GET /api/index-spoken-replies/capabilities': () => json({ spoken_replies: true, protocol: 1 }),
+  } });
+  await f.signIn();
+  f.local.set('hermes.settings.v1', JSON.stringify({
+    ...JSON.parse(f.local.get('hermes.settings.v1')), spokenReplies: true,
+  }));
+  const receipt = await f.service.action({ action: 'send_to_agent', args: { message: 'plain text' } });
+  const submits = f.socketLog.filter(x => x.method === 'prompt.submit');
+  assert.equal(submits.length, 1);
+  assert.deepEqual(submits[0].params, { session_id: 'rt-new', text: 'plain text', queued: true });
+  assert.match(receipt.text, /sent text only/);
+});
+
+test('a rejected spoken prompt is not retried as text', async () => {
+  const f = fixture({
+    routes: { 'GET /api/index-spoken-replies/capabilities': () => json({ spoken_replies: true, protocol: 2 }) },
+    gateway: { 'prompt.submit': () => ({ status: 'rejected' }) },
+  });
+  await f.signIn();
+  await f.service.config({ type: 'spokenReplies', value: true });
+  await assert.rejects(f.service.action({ action: 'send_to_agent', args: { message: 'spoken' } }), /declined the message/);
+  const submits = f.socketLog.filter(x => x.method === 'prompt.submit');
+  assert.equal(submits.length, 1);
+  assert.equal(submits[0].params.reply_format, 'text_and_audio');
+});
+
 test('a queued prompt says so', async () => {
   const f = fixture({ gateway: { 'prompt.submit': () => ({ status: 'queued' }) } });
   await f.signIn();

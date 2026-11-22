@@ -512,13 +512,32 @@ function createService(env) {
         stored = created.stored_session_id;
       }
       if (!runtime) throw PluginError('UNKNOWN', 'Hermes did not open the session; not sent');
-      // queued=true waits behind a running turn instead of redirecting it, as the companion does.
-      var ack = await call('prompt.submit', { session_id: runtime, text: message, queued: true }, true);
+      // The spoken protocol is an HTTP capability, never an extension to the normal JSON-RPC
+      // prompt.submit contract. Probe before any send; stale preferences cannot change that contract.
+      var spoken = !!settings().spokenReplies;
+      var spokenSupported = false;
+      var spokenHint = false;
+      if (spoken) {
+        try {
+          var caps = await api('/api/index-spoken-replies/capabilities');
+          spokenSupported = !!(caps && caps.spoken_replies === true && caps.protocol === 2);
+          spokenHint = !spokenSupported;
+        } catch (e) {
+          if (e.code === 'AUTH_REQUIRED' || e.code === 'PERMISSION_DENIED') throw e;
+          spokenHint = true;
+        }
+      }
+      var promptParams = { session_id: runtime, text: message, queued: true };
+      if (spoken && spokenSupported) {
+        promptParams.reply_format = 'text_and_audio';
+        promptParams.queued = false;
+      }
+      var ack = await call('prompt.submit', promptParams, true);
       if (ack.status === 'rejected') throw PluginError('INVALID_ARGS', 'Hermes declined the message; not sent');
       if (ack.status !== 'streaming' && ack.status !== 'queued') {
         throw PluginError('UNKNOWN', 'Hermes did not confirm delivery; check Hermes before sending again');
       }
-      return { stored: stored, queued: ack.status === 'queued' };
+      return { stored: stored, queued: ack.status === 'queued', spokenHint: spokenHint };
     });
     if (!target && outcome.stored) {
       var savedSettings = settings();
@@ -536,7 +555,8 @@ function createService(env) {
     }
     var where = target ? (target.ongoing ? 'your ongoing Index conversation' : '"' + target.title + '"') : 'a new Hermes session';
     return {
-      text: (outcome.queued ? 'Queued for ' : 'Sent to ') + where + '.',
+      text: (outcome.queued ? 'Queued for ' : 'Sent to ') + where + '.' +
+        (outcome.spokenHint ? ' Spoken replies are unsupported or unavailable; sent text only. Enable spoken replies only on a dashboard that supports them.' : ''),
       refreshed: ['agent/chats', 'hermes/status'],
       session_id: outcome.stored || null,
     };
@@ -628,6 +648,7 @@ function createService(env) {
       base: current ? current.base : (s.base || ''), kind: current ? current.kind : null,
       username: current && current.username || null,
       destination: s.destination || 'new', ongoingSessionId: s.ongoingSessionId || null, messagingReadOnly: !!s.messagingReadOnly,
+      spokenReplies: !!s.spokenReplies,
     };
   }
 
@@ -678,6 +699,10 @@ function createService(env) {
     }
     if (type === 'messagingReadOnly') {
       writeLocal(SETTINGS, Object.assign(settings(), { messagingReadOnly: !!message.value }));
+      return status();
+    }
+    if (type === 'spokenReplies') {
+      writeLocal(SETTINGS, Object.assign(settings(), { spokenReplies: !!message.value }));
       return status();
     }
     throw PluginError('INVALID_REQUEST', 'Unknown settings message');

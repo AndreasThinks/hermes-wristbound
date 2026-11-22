@@ -125,8 +125,30 @@ class ReplyAlertsTest {
         poll()
         append("cli", 30.0, msg("""{"id":5,"role":"assistant","timestamp":30.0,"content":"MEDIA:/home/h/.hermes/cache/audio/tts_5.ogg"}"""))
         poll()
-        assertEquals(listOf(false to false, true to true), alerts.map { it.hasAudio to it.silent })
-        assertEquals(listOf("4", "4"), alerts.map { it.messageId })
+        // The delivered text is never delivered again: late audio only updates inbox and history.
+        assertEquals(listOf(false to false), alerts.map { it.hasAudio to it.silent })
+        assertEquals(listOf("4"), attempts)
+        poll()
+        assertEquals(listOf("4"), attempts)
+    }
+
+    @Test
+    fun lateAudioForMutedTextStillAlertsOnceAfterAFailedAttempt() = runTest {
+        policy = policy.copy(chats = false)
+        session("chat", "cli", 10.0)
+        val d = dispatcher()
+        poll(d)
+        append("chat", 20.0, user(1, 19.0), answer(2, 20.0))
+        poll(d) // text muted: decided, never delivered
+        assertEquals(emptyList<String>(), attempts)
+        append("chat", 30.0, answer(3, 30.0, "MEDIA:/cache/tts_late.ogg"))
+        deliveryFailures = 1
+        poll(d)
+        poll(d)
+        assertEquals(listOf("2", "2"), attempts)
+        assertEquals(listOf(false to true), alerts.map { it.silent to it.hasAudio })
+        poll(d)
+        assertEquals(2, attempts.size)
     }
 
     @Test
@@ -404,7 +426,7 @@ class ReplyAlertsTest {
         policy = policy.copy(chats = false)
         append("chat", 30.0, answer(3, 30.0, "MEDIA:/cache/tts_late.ogg"))
         poll()
-        assertEquals(listOf(false, true), alerts.map { it.silent })
+        assertEquals(listOf("2"), attempts)
     }
 
     @Test
@@ -649,8 +671,7 @@ class ReplyAlertsTest {
         assertEquals(listOf("6", "8"), alerts.map { it.messageId })
         append("desk", 35.0, msg("""{"id":9,"role":"assistant","timestamp":35.0,"content":"MEDIA:/home/h/.hermes/cache/audio/tts_9.ogg"}"""))
         poll()
-        assertEquals(listOf("6", "8", "8"), alerts.map { it.messageId })
-        assertTrue(alerts.last().silent && alerts.last().hasAudio)
+        assertEquals(listOf("6", "8"), attempts)
         assertEquals(2, log.size)
     }
 }

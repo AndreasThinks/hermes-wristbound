@@ -221,8 +221,9 @@ class ReplyAlerts(
         // Seen before: only newly arrived audio matters.
         if (!reply.hasAudio || !store.markAlerted(audioKey)) return null
         return when {
-            // The text already alerted: add Play to it without alerting again.
-            policy.enabled && store.isAlerted(DELIVERED_PREFIX + reply.id) -> alert(silent = true, listOf(audioKey))
+            // The text was already delivered (watch ack or notification posted): the exact reply
+            // is never delivered again. Callers refresh the inbox and history with the audio.
+            store.isAlerted(DELIVERED_PREFIX + reply.id) -> null
             policy.audioAlerts -> alert(silent = false, listOf(audioKey))
             else -> null.also { logSilent(session, reply, policy, kind) }
         }
