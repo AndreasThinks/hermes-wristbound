@@ -1,0 +1,70 @@
+name: Pebble Store
+
+# Called by release.yml for the watch app and the Index plugin. Publishes an already-built PBW
+# to the Pebble Store with `pebble publish`. It runs in the `pebble-store` environment, so
+# required reviewers can be added there to approve each Store release.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      project:
+        description: Project folder, watch or pebble-plugin
+        required: true
+        type: string
+      artifact:
+        required: true
+        type: string
+      pbw:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pebble-store
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact }}
+          path: dist
+      - uses: astral-sh/setup-uv@v6
+      - name: Install Pebble SDK
+        run: |
+          uv tool install pebble-tool
+          yes | pebble sdk install latest
+      # `pebble publish` signs in with the GitHub Actions OIDC token by default. If the Store
+      # does not accept that for this account, a refresh token from `pebble login` is used.
+      - name: Sign in with a saved refresh token, if one is set
+        env:
+          REFRESH_TOKEN: ${{ secrets.PEBBLE_FIREBASE_REFRESH_TOKEN }}
+        run: |
+          set -eu
+          [ -n "$REFRESH_TOKEN" ] || { echo "No refresh token secret; using GitHub OIDC."; exit 0; }
+          py="$(dirname "$(readlink -f "$(which pebble)")")/python"
+          key=$("$py" -c 'from pebble_tool.firebase_account import DEFAULT_FIREBASE_API_KEY as k; print(k)')
+          token=$(curl -fsS "https://securetoken.googleapis.com/v1/token?key=$key" \
+            --data-urlencode grant_type=refresh_token \
+            --data-urlencode "refresh_token=$REFRESH_TOKEN" | jq -r .id_token)
+          echo "::add-mask::$token"
+          echo "PEBBLE_FIREBASE_ID_TOKEN=$token" >> "$GITHUB_ENV"
+      - name: Publish to the Pebble Store
+        working-directory: ${{ inputs.project }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          notes=$(gh release view "${{ inputs.tag }}" --repo "$GITHUB_REPOSITORY" --json name,url \
+            --jq '"\(.name). Release notes: \(.url)"')
+          pebble publish --non-interactive --is-published \
+            --pbw "../dist/${{ inputs.pbw }}" \
+            --release-notes "$notes"
