@@ -2,7 +2,7 @@
   "name": "wristbound-voice",
   "label": "Hermes Wristbound voice",
   "description": "Backend routes for Hermes Wristbound voice replies. No dashboard page.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "tab": { "hidden": true },
   "entry": "dist/index.js",
   "api": "plugin_api.py"

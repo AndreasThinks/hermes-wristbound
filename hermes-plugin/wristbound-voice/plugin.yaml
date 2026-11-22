@@ -1,5 +1,5 @@
 name: wristbound-voice
-version: 0.1.0
+version: 0.2.0
 description: "Voice replies for Hermes Wristbound: speaks the reply to an armed Index capture with Hermes' own TTS, like /voice, and keeps the audio for the watch."
 author: "Hermes Wristbound"
 hooks:

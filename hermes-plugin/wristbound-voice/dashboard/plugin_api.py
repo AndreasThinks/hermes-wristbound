@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-API_VERSION = 1
+API_VERSION = 2
 
 
 def _load_store():
@@ -44,10 +44,14 @@ def store():
 
 class ArmBody(BaseModel):
     text: str
+    # The stored session the message goes to, when the client knows it (a resumed chat). The
+    # arm then only matches a turn in that session.
+    session_id: str | None = None
 
 
 @router.get("/capabilities")
 def capabilities():
+    # 2: arms take a session_id, return an arm_id, and can be cancelled.
     return {"plugin": "wristbound-voice", "version": API_VERSION}
 
 
@@ -55,10 +59,16 @@ def capabilities():
 def arm(body: ArmBody):
     """Ask for a voice reply to the next turn whose prompt is exactly ``text``."""
     try:
-        expires_at = store().arm(body.text)
+        arm_id, expires_at = store().arm(body.text, body.session_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"armed": True, "expires_at": expires_at}
+    return {"armed": True, "arm_id": arm_id, "expires_at": expires_at}
+
+
+@router.delete("/arms/{arm_id}")
+def cancel_arm(arm_id: int):
+    """The client could not send the message it armed: forget the arm."""
+    return {"cancelled": store().cancel_arm(arm_id)}
 
 
 @router.get("/sessions/{session_id}/replies")
