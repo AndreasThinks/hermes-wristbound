@@ -3,8 +3,8 @@ name: Release
 # Publishing a GitHub release builds every part from the release tag and publishes it:
 #   - watch app and Index plugin PBWs, the Android companion APK, the voice plugin zip and
 #     SHA256SUMS are attached to the release (replacing any uploaded by hand);
-#   - the watch app and the Index plugin go to the Pebble Store when their version changed
-#     since the previous release (skipped for prereleases);
+#   - the watch app and the Index plugin go to the Pebble Store when the Store does not list
+#     their version yet (never for prereleases; manual runs only when asked);
 #   - the website is redeployed from main.
 # Run it by hand with a tag to rebuild and re-attach an existing release.
 # docs/RELEASING.md lists the secrets this needs and the steps that stay manual.
@@ -18,9 +18,9 @@ on:
         description: Release tag to build, for example v0.6.13
         required: true
       publish_store:
-        description: Also publish changed apps to the Pebble Store
+        description: Also publish to the Pebble Store any app version it does not list yet
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: read
@@ -40,51 +40,44 @@ jobs:
       plugin: ${{ steps.read.outputs.plugin }}
       android: ${{ steps.read.outputs.android }}
       voice: ${{ steps.read.outputs.voice }}
-      watch_changed: ${{ steps.read.outputs.watch_changed }}
-      plugin_changed: ${{ steps.read.outputs.plugin_changed }}
+      watch_publish: ${{ steps.read.outputs.watch_publish }}
+      plugin_publish: ${{ steps.read.outputs.plugin_publish }}
       store: ${{ steps.read.outputs.store }}
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ env.TAG }}
-          fetch-depth: 0
-      - name: Read versions and compare with the previous release
-        id: read
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Release plan tests
+        working-directory: .github/scripts
+        run: |
+          pip install pytest
+          python -m pytest -q test_release_plan.py
+      # The release event carries its own prerelease flag; a manual run asks GitHub, so a
+      # rebuild of a prerelease can never reach the Store.
+      - name: Read the release's prerelease status
+        id: release
         env:
-          PRERELEASE: ${{ github.event.release.prerelease || false }}
-          PUBLISH_STORE: ${{ github.event_name == 'release' || inputs.publish_store }}
+          GH_TOKEN: ${{ github.token }}
+          EVENT_PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
           set -eu
-          watch=$(jq -r .version watch/package.json)
-          plugin=$(jq -r .version pebble-plugin/package.json)
-          android=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' android/app/build.gradle.kts)
-          voice=$(sed -n 's/^version: *//p' hermes-plugin/wristbound-voice/plugin.yaml)
-          echo "Watch $watch, Index plugin $plugin, Android $android, voice plugin $voice"
-
-          # Release tags follow the Android companion's version.
-          if [ "$TAG" != "v$android" ]; then
-            echo "::error::Tag $TAG does not match the Android versionName $android. Bump android/app/build.gradle.kts or retag."
-            exit 1
-          fi
-
-          prev=$(git tag --list 'v*' --sort=-v:refname | grep -x -A1 -- "$TAG" | sed -n 2p || true)
-          version_at() { git show "$prev:$1" 2>/dev/null | jq -r .version 2>/dev/null || echo none; }
-          if [ -n "$prev" ]; then
-            prev_watch=$(version_at watch/package.json)
-            prev_plugin=$(version_at pebble-plugin/package.json)
+          if [ "$GITHUB_EVENT_NAME" = release ]; then
+            pre="$EVENT_PRERELEASE"
           else
-            prev_watch=none; prev_plugin=none
+            pre=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)
           fi
-          echo "Previous release ${prev:-none}: watch $prev_watch, Index plugin $prev_plugin"
-
-          store=false
-          if [ "$PRERELEASE" != "true" ] && [ "$PUBLISH_STORE" = "true" ]; then store=true; fi
-          {
-            echo "watch=$watch"; echo "plugin=$plugin"; echo "android=$android"; echo "voice=$voice"
-            echo "watch_changed=$([ "$watch" != "$prev_watch" ] && echo true || echo false)"
-            echo "plugin_changed=$([ "$plugin" != "$prev_plugin" ] && echo true || echo false)"
-            echo "store=$store"
-          } >> "$GITHUB_OUTPUT"
+          echo "Prerelease: $pre"
+          echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
+      # Asks the Pebble Store which versions it already lists, so a release whose Store job
+      # failed or was skipped, or a promoted prerelease, still gets published.
+      - name: Read versions and plan the Store releases
+        id: read
+        env:
+          PUBLISH_STORE: ${{ github.event_name == 'release' || inputs.publish_store }}
+        run: python .github/scripts/release_plan.py "$TAG" "${{ steps.release.outputs.prerelease }}" "$PUBLISH_STORE"
 
   watch:
     needs: versions
@@ -133,6 +126,12 @@ jobs:
           pebble build
           mkdir -p ../dist
           cp build/pebble-plugin.pbw "../dist/hermes-index-plugin-v${{ needs.versions.outputs.plugin }}.pbw"
+      # The same plugin-host run as build.yml, against the exact PBW that gets attached.
+      - name: Run in the Pebble plugin host against a scripted Hermes
+        working-directory: pebble-plugin
+        run: |
+          NO_PROXY='*' "$(dirname "$(readlink -f "$(which pebble)")")/python" tools/emulator_e2e.py \
+            "../dist/hermes-index-plugin-v${{ needs.versions.outputs.plugin }}.pbw"
       - uses: actions/upload-artifact@v4
         with:
           name: release-index-plugin
@@ -178,8 +177,13 @@ jobs:
           cert=$("$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --print-certs "$apk" \
             | sed -n 's/.*certificate SHA-256 digest: //p' | head -1)
           echo "APK signing certificate SHA-256: $cert"
-          want=$(echo "${EXPECTED:-}" | tr -d ': ' | tr 'A-F' 'a-f')
-          if [ -n "$want" ] && [ "$cert" != "$want" ]; then
+          # Fail closed: an APK signed with any other key cannot update existing installs.
+          want=$(printf '%s' "${EXPECTED:-}" | tr -d ': ' | tr 'A-F' 'a-f')
+          if ! printf '%s' "$want" | grep -Eqx '[0-9a-f]{64}'; then
+            echo "::error::Repository variable ANDROID_CERT_SHA256 is missing or not a SHA-256 fingerprint. See docs/RELEASING.md."
+            exit 1
+          fi
+          if [ "$cert" != "$want" ]; then
             echo "::error::APK certificate $cert does not match ANDROID_CERT_SHA256 $want."
             exit 1
           fi
@@ -242,7 +246,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    if: needs.versions.outputs.store == 'true' && needs.versions.outputs.watch_changed == 'true'
+    if: needs.versions.outputs.store == 'true' && needs.versions.outputs.watch_publish == 'true'
     uses: ./.github/workflows/pebble-store.yml
     with:
       tag: ${{ github.event.release.tag_name || inputs.tag }}
@@ -256,7 +260,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    if: needs.versions.outputs.store == 'true' && needs.versions.outputs.plugin_changed == 'true'
+    if: needs.versions.outputs.store == 'true' && needs.versions.outputs.plugin_publish == 'true'
     uses: ./.github/workflows/pebble-store.yml
     with:
       tag: ${{ github.event.release.tag_name || inputs.tag }}

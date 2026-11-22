@@ -4,14 +4,16 @@ Publishing a GitHub release runs [`.github/workflows/release.yml`](../.github/wo
 
 | Part | What the workflow does |
 |------|------------------------|
-| Watch app | Builds `wristbound-watch-vX.Y.Z.pbw`, attaches it, and publishes it to the Pebble Store if its version changed since the previous release |
-| Index plugin | Runs its tests, builds `hermes-index-plugin-vX.Y.Z.pbw`, attaches it, and publishes it to the Pebble Store if its version changed |
-| Android companion | Runs its tests, builds `wristbound-companion-vX.Y.Z-debug.apk` signed with the release key, checks the certificate, and attaches it |
+| Watch app | Builds `wristbound-watch-vX.Y.Z.pbw`, attaches it, and publishes it to the Pebble Store if the Store does not list that version yet |
+| Index plugin | Runs its unit tests, builds `hermes-index-plugin-vX.Y.Z.pbw`, runs that exact PBW in the plugin host against a scripted Hermes, attaches it, and publishes it to the Pebble Store if the Store does not list that version yet |
+| Android companion | Runs its tests, builds `wristbound-companion-vX.Y.Z-debug.apk` signed with the release key, checks its certificate against `ANDROID_CERT_SHA256`, and attaches it |
 | Voice plugin | Runs its tests and attaches `wristbound-voice-vX.Y.Z.zip`. Hosts install it from the repository path, so the release tag is the publication |
 | Checksums | Attaches `SHA256SUMS` for every file above |
 | Website | Redeploys GitHub Pages from `main` |
 
 Files attached to the release by hand are replaced by the CI builds of the same name.
+
+The Store decision reads the live listings (`appstore-api.repebble.com`), not the previous tag, so a version whose earlier Store job failed or was skipped, or that first shipped as a prerelease, is published by the next release that carries it. If the Store cannot be read, the run fails rather than guess. The logic and its tests are in `.github/scripts/release_plan.py`.
 
 ## Cutting a release
 
@@ -20,7 +22,7 @@ Files attached to the release by hand are replaced by the CI builds of the same 
 3. Create a GitHub release with tag `vX.Y.Z`, where `X.Y.Z` is the Android `versionName`. The workflow stops if the two differ.
 4. Watch the **Release** run. If the `pebble-store` environment has required reviewers, approve the Store jobs there.
 
-A prerelease gets the attached builds but is not sent to the Pebble Store. To rebuild an existing release, run **Release** from the Actions tab with its tag; untick *publish_store* to skip the Store.
+A prerelease gets the attached builds but is never sent to the Pebble Store, including on a manual run, which reads the release's prerelease flag from GitHub. To rebuild an existing release, run **Release** from the Actions tab with its tag. A manual run leaves the Store alone unless you tick *publish_store*.
 
 ## One-time setup
 
@@ -29,7 +31,7 @@ A prerelease gets the attached builds but is not sent to the Pebble Store. To re
 | Name | Kind | Required | What it is |
 |------|------|----------|------------|
 | `ANDROID_DEBUG_KEYSTORE_B64` | Secret | Yes | The debug keystore that signed the published APKs, base64-encoded. Without it the Android job fails rather than attach an APK that cannot update the installed one. Create it with `base64 -w0 ~/.android/debug.keystore` (on macOS, `base64 -i ~/.android/debug.keystore`) on the machine that built v0.6.11 and v0.6.12. The workflow uses the standard debug password and alias. |
-| `ANDROID_CERT_SHA256` | Variable | Recommended | The expected signing certificate SHA-256, for example from `apksigner verify --print-certs` on the v0.6.12 APK. The run fails if the new APK's certificate differs. The run log prints the certificate either way. |
+| `ANDROID_CERT_SHA256` | Variable | Yes | The expected signing certificate SHA-256, from `apksigner verify --print-certs` on the published v0.6.12 APK (colons and either case are fine). The Android job fails before anything is attached if this is missing, malformed, or differs from the built APK's certificate. |
 | `PEBBLE_FIREBASE_REFRESH_TOKEN` | Secret | Only if OIDC is refused | `pebble publish` first signs in with GitHub's OIDC token. If the Store does not accept that for your account, run `pebble login` locally and copy `refresh_token` from `firebase_oauth_storage.json` in the Pebble SDK folder (`~/Library/Application Support/Pebble SDK` on macOS, `~/.local/share/pebble-sdk` or `~/.pebble-sdk` on Linux). If it stops working, sign in again and replace it. |
 
 ### Environment

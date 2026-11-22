@@ -83,3 +83,16 @@ jobs:
         with:
           name: companion-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
+
+  release-plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Release plan tests
+        working-directory: .github/scripts
+        run: |
+          pip install pytest
+          python -m pytest -q test_release_plan.py
