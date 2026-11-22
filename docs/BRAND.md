@@ -5,15 +5,15 @@ One look for every part of Hermes Wristbound: the watch app, the Android compani
 ## Name
 
 - **Hermes Wristbound** is the product: everything in this repository, together.
-- **Wristbound** on its own is fine where space is short (the watch launcher, the Android launcher, the splash), and always means the same product.
+- **Wristbound** on its own is fine where space is short (the Android launcher label, notification headers, "Open in Wristbound"), and always means the same product.
 - Name the parts by what they are, after the product name, not as separate brands:
 
 | Part | Say | Shipped as |
 |------|-----|------------|
-| Watch app | the Wristbound watch app | Pebble Store: *Wristbound* (`watch/`) |
-| Phone companion | the Wristbound companion | Android APK: *Wristbound* (`android/`) |
-| Index plugin | the Hermes Wristbound Index plugin | Pebble Store: *Hermes for Index*; appears as *Hermes* in Index (`pebble-plugin/`) |
-| Voice plugin | the Hermes Wristbound voice plugin | Hermes plugin `wristbound-voice` (`hermes-plugin/`) |
+| Watch app | the Wristbound watch app | *Hermes Wristbound* in the watch launcher, *HERMES WRISTBOUND* on the splash (`watch/`) |
+| Phone companion | the Wristbound companion | Android app name *Hermes Wristbound*; *Wristbound* under the launcher icon, where the full name would be cut off (`android/`) |
+| Index plugin | the Hermes Wristbound Index plugin | Pebble Store: *Hermes for Index*; appears as *Hermes* in Index, because that is the name you say ("Tell Hermes …"); its settings page carries the Hermes Wristbound mark (`pebble-plugin/`) |
+| Voice plugin | the Hermes Wristbound voice plugin | Hermes plugin `wristbound-voice`, labelled *Hermes Wristbound voice* (`hermes-plugin/`) |
 
 *Hermes* alone means Hermes Agent, the assistant this connects to. Don't call any part of Wristbound "Hermes".
 

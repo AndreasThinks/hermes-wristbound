@@ -71,7 +71,7 @@ static void prv_draw(Layer *layer, GContext *ctx) {
     }
   }
 #if defined(PBL_ROUND)
-  GSize text = graphics_text_layout_get_content_size("WRISTBOUND", theme_font_label(), label,
+  GSize text = graphics_text_layout_get_content_size("HERMES WRISTBOUND", theme_font_label(), label,
                                                      GTextOverflowModeTrailingEllipsis,
                                                      GTextAlignmentCenter);
   graphics_context_set_fill_color(ctx, THEME_BG);
@@ -79,7 +79,7 @@ static void prv_draw(Layer *layer, GContext *ctx) {
                                 LABEL_H + 2), 0, GCornerNone);
 #endif
   graphics_context_set_text_color(ctx, THEME_SIGNAL);
-  graphics_draw_text(ctx, "WRISTBOUND", theme_font_label(), label,
+  graphics_draw_text(ctx, "HERMES WRISTBOUND", theme_font_label(), label,
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
