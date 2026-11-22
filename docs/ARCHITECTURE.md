@@ -4,13 +4,21 @@ The first vertical slice is built (see [MILESTONES.md](MILESTONES.md)). The sect
 
 ## As built
 
+Hermes Wristbound has three parts, all talking to the same Hermes dashboard:
+
+- the **watch app** and its **Android companion** (`watch/`, `android/`), the full client on the wrist;
+- the **Index plugin** (`pebble-plugin/`), JavaScript in the Pebble phone app that sends Index captures to Hermes;
+- the **voice plugin** (`hermes-plugin/wristbound-voice/`), a Hermes user plugin that speaks the reply to a dictated capture.
+
+The watch app and companion:
+
 ```text
 Pebble watchapp (watch/src/c)
   ui.c       session list, session view, reply view, compose menu, action menu, alert
   comm.c     AppMessage send/receive, outbox queue
   model.c    on-screen state only: sessions, messages, submit and playback status
        |
-       |  AppMessage, protocol v1 (PROTOCOL.md)
+       |  AppMessage, protocol v5 (PROTOCOL.md)
        v
 Android companion (android/app/src/main/java/dev/wristbound/companion)
   pebble/    WatchLink + WristboundListenerService (PebbleKit Android 2), WatchCodec, text fitting
@@ -29,7 +37,7 @@ Hermes dashboard (port 9119, published with tailscale serve)
 
 A watch reply runs like this: the watch sends a submit command with the session id and text; the companion resumes that session on the gateway socket, submits the prompt queued behind any running turn, and waits for the completion event; status updates (queued, working, completed, failed, uncertain) go back to the watch as they happen, and the answer arrives as a new message. If the socket drops after the prompt was sent, the companion never resends: it looks for the answer in the transcript, re-attaches to the turn, or reports *uncertain*.
 
-Replies that start elsewhere (Telegram, Ringbearer, the desktop) are found by polling the session list. The controller owns the schedule: every check is an exact alarm under a short wakelock, every 30 s while the watchapp is open and at the chosen interval while it is closed with background checking on (the default). A coroutine timer stops while the CPU sleeps, and the Pebble app's binding keeps the process alive but not the CPU awake; a check that fails still schedules the next one. One foreground service keeps the process running whenever there is a reason (`KeepAlive`): background checking, a turn sent from the watch that has not finished, or a reply playing on the phone; it also holds the CPU while a turn streams and checks again when the network returns. Every delivery path goes through the same alert policy, which decides whether a reply alerts, alerts as audio, or updates silently, and records a checkpoint so it alerts once.
+Replies that start elsewhere (Telegram, Ringbearer, Index, the desktop) are found through the dashboard's `sessions.changed` broadcast: the companion keeps one quiet gateway connection open and checks the session list when it fires (since Android v0.6.10). Timed checks remain as the safety net, every 15 minutes while that connection is up and at the chosen *Reply speed* while it is down. The controller owns that schedule: every check is an exact alarm under a short wakelock. A coroutine timer stops while the CPU sleeps, and the Pebble app's binding keeps the process alive but not the CPU awake; a check that fails still schedules the next one. One foreground service keeps the process running whenever there is a reason (`KeepAlive`): background checking, a turn sent from the watch that has not finished, or a reply playing on the phone; it also holds the CPU while a turn streams and checks again when the network returns. Every delivery path goes through the same alert policy, which decides whether a reply alerts, alerts as audio, or updates silently, and records a checkpoint so it alerts once.
 
 Voice replies to Index captures are made on the Hermes side by the [wristbound-voice plugin](../hermes-plugin/README.md), using only Hermes plugin hooks and dashboard plugin routes. The Index plugin arms one exact prompt before sending it; the plugin marks that turn pending before it runs and speaks the saved reply afterwards. `DashboardClient` merges the plugin's records onto transcript rows (clips, or a pending flag), and the alert policy holds a pending reply for up to 20 s, re-checking every 3 s, so its single alert already offers Play.
 

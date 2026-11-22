@@ -1,3 +1,5 @@
 <resources>
-    <string name="app_name">Wristbound</string>
+    <string name="app_name">Hermes Wristbound</string>
+    <!-- Under the launcher icon, where the full name would be cut off. -->
+    <string name="launcher_name">Wristbound</string>
 </resources>

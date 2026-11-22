@@ -1,156 +1,114 @@
-# Hermes Wristbound
+<p align="center">
+  <img src="docs/screenshots/splash.png" width="144" alt="The Wristbound launch screen: the Hermes girl in green and violet pixels over the Wristbound name">
+</p>
 
-A Pebble watchapp and Android companion for using [Hermes Agent](https://github.com/NousResearch/hermes-agent) without taking your phone out: browse sessions, read replies, answer by dictation or quick reply, and play replies through your headphones, all from the wrist.
+<h1 align="center">Hermes Wristbound</h1>
 
-**Status: experimental public release, Android v0.6.9 / watch v0.6.7.** Reply notifications on the Pebble now lead with a *Reply* action (dictation or a canned answer, sent to that session), and *Open in Wristbound* opens the conversation directly with watch v0.6.7 (see [the release notes](docs/RELEASE-0.6.9.md)); this still needs physical-watch acceptance. Earlier, Android v0.6.6 / watch v0.6.6 added opt-in *Open Wristbound for alerts*: the phone opens the watchapp to show its own banner, with a native-notification fallback if startup or delivery fails. An untouched banner returns to the watchface after 15 seconds. This launch path still needs physical-watch acceptance. Android v0.6.5 also wakes the phone for the 30 s checks while the watchapp is open, keeps checking after a failed check, and adds a *Send a test alert* button. Android v0.6.4 adds alarm-driven background checking, foreground-service keep-alive for turns and phone playback, wake locks and an Allow background use setup control. Existing saved background-checking choices are preserved; new or unset preferences default on. Real-device Doze, reboot and screen-off playback acceptance remains pending. The v0.6.6 watchapp adds phone-launch splash bypass and untouched-alert expiry; protocol v5 is unchanged. Android v0.6.2 adds readable markdown-to-watch formatting; watch v0.6.1 adds bold banner headlines, an AUDIO tag and a Select hint. Both remain on protocol v5. Earlier v0.5.0 session browsing and phone/headphone playback were exercised on a Pixel 9a with Hermes 0.22.2 and a Pebble Time 2. This release adds conversation-aware native Pebble notifications with silent-phone defaults. Voice replies to messages dictated through Index come from the optional [wristbound-voice Hermes plugin](hermes-plugin/README.md); no modified Hermes is needed. These new paths pass host regression tests but still require locked-phone, watchface-visible notification and exact-audio playback acceptance on hardware. Android may retain silent shade and background-service notifications; forwarding depends on Pebble settings and user channel overrides. Watch-speaker sound, forced phone-speaker routing with headphones attached, and hardware Quick Launch also need dedicated acceptance checks. All seven watch targets build; this does not establish hardware testing on every model. See [installation and setup](docs/INSTALL.md) and [the test plan](docs/TESTING.md).
+<p align="center"><b>Your <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a>, on your wrist.</b><br>
+Talk to Hermes from a Pebble watch or the Index ring, read and hear its replies, and answer it, without taking your phone out.</p>
 
-**Android companion required.** The watch app is not standalone and does not include a hosted Hermes service. Install the watch app from the [Pebble Store](https://apps.repebble.com/22984baa50dd4b68ba9a0945), then download the matched Android APK from [GitHub Releases](https://github.com/AndreasThinks/hermes-wristbound/releases/latest) and follow the [setup guide](docs/INSTALL.md). The companion is currently a sideloaded debug APK, not a Play Store app.
+<p align="center">
+  <a href="https://apps.repebble.com/22984baa50dd4b68ba9a0945">Watch app</a> ·
+  <a href="https://apps.repebble.com/77caeb14dc3f4d3c8367ab82">Index plugin</a> ·
+  <a href="https://github.com/AndreasThinks/hermes-wristbound/releases/latest">Android companion</a> ·
+  <a href="docs/INSTALL.md">Install guide</a> ·
+  <a href="https://andreasthinks.github.io/hermes-wristbound/">Website</a>
+</p>
+
+Hermes Wristbound is one product in three parts. Each works on its own, and they are built to work together against your own Hermes.
+
+| Part | Lives on | What it does |
+|------|----------|--------------|
+| **[Watch app](docs/FEATURES.md)** with its Android companion (`watch/`, `android/`) | Pebble + Android phone | The full Hermes client on the wrist: browse sessions, read conversations as they stream in, reply by dictation or quick reply, approve steps, and play Hermes' audio on headphones, the phone or the watch speaker. |
+| **[Index plugin](pebble-plugin/README.md)** (`pebble-plugin/`) | Pebble phone app (Android and iOS) | Makes Hermes an agent for the Index ring and any plugin-aware app: say "Tell Hermes …" and the message goes straight to Hermes. Optional *Reply with voice*. |
+| **[Voice plugin](hermes-plugin/README.md)** `wristbound-voice` (`hermes-plugin/`) | Your Hermes host | Speaks the reply to a message you dictated, with your own Hermes TTS, and keeps the clip so the watch can play it. No modified Hermes needed. |
+
+Together: you say *"Tell Hermes to …"* to Index, the Index plugin sends it, the voice plugin speaks the answer, and the watch buzzes once with **Play**.
 
 <p>
-  <img src="docs/screenshots/splash.png" width="144" alt="Launch screen: the Hermes girl in green and violet pixels over the Wristbound name">
-  <img src="docs/screenshots/home.png" width="144" alt="Home: New session, Recent audio (1 new), Sessions (1 new of 3)">
-  <img src="docs/screenshots/sessions.png" width="144" alt="Sessions: Watch chat (new, working), Index: groceries (telegram), Repo cleanup (read-only)">
+  <img src="docs/screenshots/home.png" width="144" alt="Home: New session, Recent audio, Sessions">
   <img src="docs/screenshots/session.png" width="144" alt="A conversation: your message in a bubble, Hermes' reply below it with an audio mark">
   <img src="docs/screenshots/working.png" width="144" alt="A reply streaming into the conversation as Hermes writes it">
   <img src="docs/screenshots/banner.png" width="144" alt="A new audio reply as a banner over the lower part of the home screen">
   <img src="docs/screenshots/actions.png" width="144" alt="Reply actions: Play on headphones, Play on phone speaker, Replay from start">
-  <img src="docs/screenshots/recent-audio.png" width="144" alt="Recent audio: audio replies from any session, newest first, with age and a preview">
-  <img src="docs/screenshots/compose.png" width="144" alt="Compose: Dictate, or a quick reply such as Yes, No, Continue">
 </p>
-
 <p>
-  <img src="docs/screenshots/chalk-splash.png" width="144" alt="Launch screen on the round Pebble Time Round">
   <img src="docs/screenshots/chalk-home.png" width="144" alt="Home on the round Pebble Time Round">
-  <img src="docs/screenshots/chalk-sessions.png" width="144" alt="Session list on the round Pebble Time Round">
   <img src="docs/screenshots/chalk-session.png" width="144" alt="A conversation on the round screen">
   <img src="docs/screenshots/chalk-banner.png" width="144" alt="A reply banner in the lower bowl of the round screen">
+  <img src="docs/screenshots/recent-audio.png" width="144" alt="Recent audio: audio replies from any session, newest first">
+  <img src="docs/screenshots/compose.png" width="144" alt="Compose: Dictate, or a quick reply such as Yes, No, Continue">
 </p>
 
 *Basalt (Pebble Time) and Chalk (Pebble Time Round) emulators, driven by the scripted phone in `watch/tools/fake_phone.py`; the conversation is canned.*
 
-### Look and feel
-
-Wristbound's look is called *Phosphor*: black glass, green (`#00FFAA`) for anything you can act on, and violet (`#AA55FF`) whenever Hermes is speaking. Fixed labels such as section headers use a bundled pixel font (Silkscreen); Hermes' own text stays in Pebble's Gothic, so every character it sends can be shown. Audio replies carry a waveform. A reply that arrives while the app is open comes in like a radio tuning in: the waveform rises, then the text types itself out in under half a second, and any button skips to the end.
-
-Each kind of event has its own vibration, so the wrist alone tells them apart:
-
-| Event | Pattern | ms on / off |
-|-------|---------|-------------|
-| Text reply | dot | 50 |
-| Reply with audio | dot dot dash | 50 · 100 · 50 · 100 · 250 |
-| Needs you: failed, outcome unknown, read-only, no headphones | dash dash dash | 250 · 150 · 250 · 150 · 250 |
-| Sent | double blip | 30 · 60 · 30 |
-| A press that does nothing (no microphone, read-only Reply) | dot | 50 |
-
-Black-and-white watches draw every accent in white. The original Pebble (Aplite) keeps the stock menu cells in these colours, without the waveform, the intro or the launch screen: its 24 KB is shared by code and heap, and the menus need the heap more.
-
-## How it works
+## How the parts fit
 
 ```text
-Pebble watchapp  (watch/, C)
-       | AppMessage over Bluetooth, see docs/PROTOCOL.md
-Android companion  (android/, Kotlin)
-       | Hermes dashboard over HTTPS + gateway WebSocket, over Tailscale
-Hermes  (authoritative sessions, turns, audio)
-
-Pebble Index -> Ringbearer -> Telegram -> Hermes session  (unchanged; Wristbound reads and plays it)
-Pebble Index -> Hermes for Index (pebble-plugin/) -> Hermes  (optional "Reply with voice")
-Hermes + wristbound-voice plugin (hermes-plugin/) -> voice clips Wristbound plays
+                    ┌──────────────── Your Hermes host ────────────────┐
+                    │  Hermes dashboard (:9119, over Tailscale)        │
+                    │    └─ wristbound-voice plugin  (hermes-plugin/)  │
+                    └───────▲───────────────────────────────▲──────────┘
+       HTTPS + WebSocket    │                               │  HTTPS + WebSocket
+                    ┌───────┴────────────┐       ┌──────────┴──────────────┐
+                    │ Wristbound         │       │ Index plugin            │
+                    │ companion (Android)│       │ (inside the Pebble app) │
+                    └───────▲────────────┘       └──────────▲──────────────┘
+          AppMessage over   │                               │ "Tell Hermes …"
+          Bluetooth         │                               │
+                    ┌───────┴────────────┐       ┌──────────┴──────────────┐
+                    │ Wristbound         │       │ Index ring, or any      │
+                    │ watch app (Pebble) │       │ plugin-aware app        │
+                    └────────────────────┘       └─────────────────────────┘
 ```
 
-The phone talks to Hermes the way the Hermes desktop app and Hermes-Relay do: it signs in to the dashboard and runs turns over the dashboard's gateway socket. That is what lets the watch continue Telegram, desktop and CLI sessions and play the audio Hermes generated, rather than starting separate API sessions. The watch never holds credentials; it only shows what the phone sends it. Telegram is not needed as a client or a player.
+Hermes stays in charge of every session, turn and audio file; Wristbound keeps no conversation store of its own. The phone talks to Hermes the way the Hermes desktop app does, so the watch can continue Telegram, desktop and CLI sessions and play the audio Hermes made. The watch never holds credentials. More in [Architecture](docs/ARCHITECTURE.md).
 
-## Features
+## Pick your setup
 
-### On the watch
+| You want | Install |
+|----------|---------|
+| Hermes on the watch: sessions, replies, audio, approvals | Watch app + Android companion |
+| To talk to Hermes from Index (Android or iOS) | Index plugin |
+| Spoken answers to what you say to Index, played from the wrist | All three |
 
-- **Home:** New session, Continue (the last session), Recent audio and Sessions, with the connection state at the top.
-- **Recent audio:** Hermes audio replies from every session, newest first, marked new until opened. Each opens as a reply card with Play, Reply and Open session, so incoming audio never needs hunting for.
-- **Sessions:** recent sessions with unread, Telegram, working and read-only labels; long-press to refresh. The last session is remembered across launches.
-- **Conversation:** a session opens as one scrolling conversation, your messages and Hermes' replies together, and a reply streams in as Hermes writes it. Select replies; hold Select for playback of the reply in focus, Newest and Refresh.
-- **Reply:** dictation where the watch has a microphone, or a quick reply (Yes, No, Continue, Thanks, Stop, Summarise that). Each send shows queued, working, completed, failed, uncertain or read-only.
-- **Playback** of one exact reply: Play on headphones (shown only while headphones are connected to the phone), Play on phone speaker (the phone's own speaker, even with headphones in), Pause, Resume, Replay from start, Stop.
-- **Play on watch speaker** (Pebble Time 2 and Pebble 2 Duo): the reply's own Hermes audio, streamed from the phone and played by the watch, with buffering progress, Pause/Resume, Stop and Replay on watch. Always an explicit choice; it never falls back to the phone's speaker. Clips are capped at 2 minutes. Other watches do not show the action.
-- **Quick Launch:** assign Wristbound to a Quick Launch button in the Pebble settings, then pick what it does in the companion app under *Watch → Watchapp opens on*: *Home*, *Dictate a new session* (straight into dictation for a new session), *Recent audio*, *Play latest audio* (opens and plays the newest audio reply, on headphones if connected, otherwise the phone speaker) or *Last session*. Opening the app normally always shows Home.
-- **Approvals:** when Hermes asks before a step (a shell command, say) in a turn you sent from the watch, the question takes the screen with the needs-you haptic. Up and Down pick *Allow once*, *Allow session*, *Always allow* or *Deny* (Deny is picked first, so a stray press never approves), Select answers. Back puts it away; the conversation offers it again. With the watchapp closed, and on the original Pebble, it arrives as a phone notification with the answers as actions, mirrored to the Pebble.
-- **Alerts:** a reply that arrives while the app is open slides up as a banner over the lower part of the screen, in Phosphor green (violet for audio), with the session and the start of the reply. A short first sentence or line is shown in bold as a headline, an audio reply carries an AUDIO tag, and the card says what Select does. Select opens the conversation at that reply; Back puts it away, and it fades after 15 s. A reply in the conversation on screen just appears there.
-- Clear connection states: connected, offline with cached data, stale, not set up, sign-in failed.
+The [install guide](docs/INSTALL.md) walks through each, starting with making your Hermes dashboard reachable from your phone.
 
-### On the phone
+## Look and feel
 
-- Signs in to the Hermes dashboard over your tailnet with a password, a browser sign-in, or the loopback session token. Credentials are stored encrypted, and tokens refresh on their own.
-- Runs turns over Hermes' gateway socket with at-most-once submission: if a connection drops after sending, it looks for the answer in the transcript or re-attaches to the running turn, and reports *uncertain* rather than sending twice.
-- Optionally opens Wristbound for incoming alerts (off by default); startup waits up to 10 seconds for HELLO before falling back to the native notification. Silent late-audio updates do not open the watchapp.
-- Delivers replies to the open watchapp, or as one phone notification mirrored to the Pebble with Reply (dictation or a canned answer, sent to that session), Open in Wristbound (opens the watchapp at that conversation), Play audio and Play on phone speaker actions, in that order. Reply notifications use a separate channel with silent phone defaults; Pebble forwarding and vibration still need device acceptance.
-- Replies that arrive through Telegram, Ringbearer or the desktop are checked for while the watchapp is open (every 30 s), and with background checking (on by default) also while it is closed and the phone is locked. Alarms wake the phone for each check, and a turn sent from the watch or a reply playing on the phone keeps the companion running after the watchapp closes.
-- Plays a reply on headphones or on the phone's speaker, whichever the watch picked: Hermes' own audio for that reply. Only replies that carry Hermes audio offer Play; text replies are never read aloud. Headphone playback pauses when they disconnect instead of switching to the speaker; speaker playback is always explicit and uses the phone's speaker even while headphones are connected. The watch is told whenever headphones connect or disconnect.
-- Chooses which sessions the watch lists: chats on this machine always, messaging chats (Telegram, Discord, Slack…) by default, scheduled and automation sessions (cron, Kanban, webhooks, subagents) only when asked; pinned sessions first.
-- One alert policy for every delivery path, decided by what a reply answers: a voice reply from any session, a reply to a message sent from the watch, a reply in a desktop or terminal chat, a text reply in a messaging chat (off by default), or background work (scheduled sessions, and Hermes following up on its own tasks; off by default). Each has its own switch, under one master switch, alongside replying to Telegram sessions, tool activity and notification privacy. Polling checkpoints persist, so a failed fetch or a restart never loses or repeats an alert.
-- Voice replies from the wristbound-voice Hermes plugin: a reply whose clip is still being made waits up to 20 s so its one alert already offers Play; after that it alerts as text and the clip joins history without a second buzz.
-- Bounded offline conversation/audio caches on the phone; the watch never stores dashboard credentials.
+Every part shares one look, **Phosphor**: black glass, **green `#00FFAA`** for anything you can act on, **violet `#AA55FF`** whenever Hermes is speaking, and a pixel font (Silkscreen) for fixed labels while Hermes' own words stay readable. Each kind of event has its own vibration, so the wrist alone tells a text reply from an audio reply from something that needs you. The [visual guide](docs/BRAND.md) has the full palette, type, marks and haptics.
 
-## Setup
+## Status
 
-Start with the [step-by-step installation guide](docs/INSTALL.md), including the companion APK, secure dashboard setup, audio routes, Quick Launch and troubleshooting.
+**Experimental.** Current versions in this repository: watch app 0.6.7, Android companion 0.6.11, Index plugin 0.1.6, voice plugin 0.1.0. Session browsing, replies and phone/headphone playback have been used on a Pixel 9a with Hermes 0.22.2 and a Pebble Time 2; the Index plugin has been used on a Pixel with Index. Newer paths (native notification actions, live updates, voice replies, watch-speaker playback) pass automated and emulator tests and still need hardware checks, listed in [Testing](docs/TESTING.md). The companion is a sideloaded APK, not a Play Store app, and there is no iOS companion. Release notes are in [docs/](docs/).
 
-1. **Hermes.** On the Hermes host, run the dashboard (`hermes dashboard`, port 9119) on loopback and publish it to your tailnet: `tailscale serve --bg --https=10443 http://127.0.0.1:9119`. If Hermes-Relay is already set up with `hermes-relay-tailscale enable`, this is already done; use the same address.
-2. **Phone.** Install the companion APK (from CI or a local build), open Wristbound, enter the dashboard address, for example `https://hermes.tailnet-name.ts.net:10443`, and press *Continue*. Wristbound asks the dashboard how it signs in and shows only that: username and password (with *Sign in with browser* for other providers), or the session token for a dashboard without a sign-in page. *Other ways to sign in* shows them all. The address is checked before anything is sent, and only becomes the active dashboard once sign-in works; credentials are kept for that address alone. Once signed in, Wristbound opens on a status card (Hermes → phone → Pebble) that names the first problem and its fix, what buzzes your wrist, and recent alerts with why each one did or did not buzz. *Test connection* and *Sign out* are under the dashboard row at the bottom.
-3. **Watch.** Install `watch.pbw` through the Pebble app. Both the debug (`dev.wristbound.companion.debug`) and release (`dev.wristbound.companion`) packages are listed as companion apps.
-4. **Background.** *Reply speed* is *Normal* (checks every minute) by default, so replies reach the watch while the watchapp is closed and the phone is locked. If the status card says *Android may hold replies back*, press *Allow background use* so battery optimisation does not hold checks back while the phone sleeps. *Only while Wristbound is open* turns background checking off.
-
-Every pull request builds both: the watch `.pbw` and the debug APK are attached to the CI run as artifacts (`watch-pbw`, `companion-debug-apk`).
-
-## Known gaps
-
-- **Replies from other surfaces are polled**, not pushed: every 30 s while the watchapp is open, and every 30 s to 5 min with background checking on. In deep Doze Android spaces the checks out further (about every 9 minutes, sooner with *Allow background use*).
-- **Clarifications and password prompts** that Hermes asks for mid-turn must be answered from another client; the watch shows that the turn is waiting. Approvals are answered on the watch, but only in turns sent from the watch.
-- A watch reply in a Telegram session is stored in that session, as a desktop reply is; it is not posted into the Telegram chat. Replies to Telegram sessions can be turned off.
-- **Voice replies need a Hermes plugin.** With *Reply with voice* on in the Index plugin, the [wristbound-voice Hermes plugin](hermes-plugin/README.md) speaks the reply to each dictated message with your Hermes TTS, and Wristbound alerts once with Play. Telegram's own `/voice` replies are deleted by Hermes after sending, so they cannot be played here. Wristbound never synthesizes replacement speech.
-- **Watch speaker playback is untested on hardware.** It works in the emulator up to the point of sound (the emulator has none). Audio is 8 kHz 8-bit to fit Bluetooth, so expect phone-call quality, and a slow link drops back to buffering mid-clip.
-- Incoming replies do not autoplay. The optional **Play latest audio** Quick Launch action deliberately starts playback and may use the phone speaker when headphones are absent.
-
-Details are in [docs/HERMES_API.md](docs/HERMES_API.md).
-
-## Development
+## Develop
 
 ```bash
-# Watchapp (needs pebble-tool: `uv tool install pebble-tool && pebble sdk install latest`)
-cd watch && pebble build            # -> watch/build/watch.pbw, for aplite, basalt, chalk, diorite, emery, flint and gabbro
-
-# Android companion (JDK 21, Android SDK platform 37; PebbleKit Android 2 requires compileSdk 37)
-cd android && ./gradlew testDebugUnitTest assembleDebug   # -> android/app/build/outputs/apk/debug/
-
-# Hermes for Index (Pebble plugin) and the wristbound-voice Hermes plugin
-cd pebble-plugin && node --test test/*.test.js && pebble build
-cd hermes-plugin && pip install pytest fastapi httpx && python -m pytest tests
+cd watch && pebble build                                   # watch app, all seven Pebble platforms
+cd android && ./gradlew testDebugUnitTest assembleDebug    # Android companion (JDK 21, SDK 37)
+cd pebble-plugin && node --test test/*.test.js && pebble build   # Index plugin
+cd hermes-plugin && pip install pytest fastapi httpx && python -m pytest tests   # voice plugin
 ```
 
-CI runs all of these on every pull request (`.github/workflows/build.yml`). To click through the watch UI without a phone or Hermes, run it in the emulator against `watch/tools/fake_phone.py`; [docs/TESTING.md](docs/TESTING.md) has the steps, including how the screenshots above were taken.
-
-### Layout
+CI runs all four on every pull request and attaches the `.pbw` files and the debug APK as artifacts. The [website](site/) deploys from `main`. To click through the watch UI without a phone or Hermes, see [Testing](docs/TESTING.md).
 
 | Path | What's there |
 |------|--------------|
-| `watch/src/c/` | Watchapp: `ui.c` (windows and menus), `comm.c` (AppMessage), `model.c` (on-screen state), `protocol.h` (keys and codes) |
-| `watch/tools/fake_phone.py` | Scripted phone for the emulator |
-| `android/.../hermes/` | Dashboard sign-in, HTTP client and gateway socket |
-| `android/.../core/` | Turn runner, session mapping, alert policy, settings, local state |
-| `android/.../pebble/` | Watch link, protocol codec and text fitting |
-| `android/.../playback/` | Reply playback and speech chunking |
-| `android/.../sync/`, `notify/`, `ui/` | Background sync, notifications and actions, settings screen |
-| `pebble-plugin/` | Hermes for Index: a Pebble plugin that sends Index captures to Hermes ([README](pebble-plugin/README.md)) |
-| `hermes-plugin/wristbound-voice/` | Hermes plugin that speaks the reply to a dictated capture ([README](hermes-plugin/README.md)) |
+| `watch/` | Pebble watch app (C): `ui.c`, `comm.c`, `model.c`, `theme.c` (Phosphor), `tools/fake_phone.py` |
+| `android/` | Android companion (Kotlin): `hermes/` sign-in and gateway, `core/` turns and alerts, `pebble/` watch link, `playback/`, `sync/`, `notify/`, `ui/` |
+| `pebble-plugin/` | Index plugin (JavaScript) |
+| `hermes-plugin/wristbound-voice/` | Voice plugin (Python) |
+| `site/` | The website |
+| `docs/` | Guides, design notes and release notes |
 
 ## Documentation
 
-- [Project brief](docs/PROJECT.md): goal, watch experience and scope.
-- [Architecture](docs/ARCHITECTURE.md): components as built, data, reliability and privacy.
-- [Hermes API findings](docs/HERMES_API.md): the dashboard routes and gateway calls Wristbound uses, sign-in, audio and remaining limits.
-- [Watch ↔ phone protocol](docs/PROTOCOL.md): AppMessage keys, commands and rules.
-- [Testing](docs/TESTING.md): automated checks, the emulator harness and the real-device plan.
-- [Milestones](docs/MILESTONES.md): acceptance criteria and current status.
-- [Hermes for Index](pebble-plugin/README.md): the Pebble plugin, including *Reply with voice*.
-- [wristbound-voice](hermes-plugin/README.md): the Hermes plugin behind voice replies, its routes and storage.
+- [Install guide](docs/INSTALL.md): all three parts, secure dashboard setup, audio, Quick Launch, troubleshooting.
+- [Features](docs/FEATURES.md): everything the watch app and companion do, and known limits.
+- [Visual guide](docs/BRAND.md): name, colour, type, marks, haptics.
+- [Architecture](docs/ARCHITECTURE.md) · [Hermes API findings](docs/HERMES_API.md) · [Watch ↔ phone protocol](docs/PROTOCOL.md)
+- [Testing](docs/TESTING.md) · [Milestones](docs/MILESTONES.md) · [Project brief](docs/PROJECT.md)
 
 ## Not in scope
 

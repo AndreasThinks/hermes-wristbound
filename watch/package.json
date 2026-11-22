@@ -6,7 +6,7 @@
   "private": true,
   "dependencies": {},
   "pebble": {
-    "displayName": "Wristbound",
+    "displayName": "Hermes Wristbound",
     "uuid": "094c587f-8bd7-4377-aa6b-ff55eb724b27",
     "sdkVersion": "3",
     "enableMultiJS": true,

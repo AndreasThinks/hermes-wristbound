@@ -1,4 +1,6 @@
-# wristbound-voice: a Hermes plugin for voice replies
+# Hermes Wristbound: voice plugin
+
+*One of the three parts of [Hermes Wristbound](../README.md): the part that runs on your Hermes host. Plugin name `wristbound-voice`.*
 
 With **Reply with voice** on in the Index plugin, Hermes answers each message you dictate with a
 voice reply, the same way `/voice` does on Telegram: it runs its own text-to-speech tool on the

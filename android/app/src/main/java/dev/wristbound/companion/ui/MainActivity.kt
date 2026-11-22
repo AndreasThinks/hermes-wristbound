@@ -41,6 +41,7 @@ import androidx.appcompat.view.ContextThemeWrapper
 import androidx.appcompat.widget.SwitchCompat
 import androidx.appcompat.widget.Toolbar
 import androidx.core.content.ContextCompat
+import androidx.core.content.res.ResourcesCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
@@ -840,7 +841,14 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, 0, 0, 0)
             addView(TextView(this@MainActivity).apply {
-                text = "Hermes on your wrist"
+                text = "HERMES WRISTBOUND"
+                textSize = 11f
+                letterSpacing = 0.06f
+                typeface = ResourcesCompat.getFont(this@MainActivity, R.font.silkscreen) ?: Typeface.MONOSPACE
+                setTextColor(color(R.color.phosphor_signal))
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "Your Hermes, on your wrist"
                 textSize = 17f
                 typeface = Typeface.MONOSPACE
                 setTextColor(color(R.color.phosphor_text))
