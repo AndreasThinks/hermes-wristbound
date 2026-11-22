@@ -91,7 +91,7 @@ cd pebble-plugin && node --test test/*.test.js && pebble build   # Index plugin
 cd hermes-plugin && pip install pytest fastapi httpx && python -m pytest tests   # voice plugin
 ```
 
-CI runs all four on every pull request and attaches the `.pbw` files and the debug APK as artifacts. The [website](site/) deploys from `main`. To click through the watch UI without a phone or Hermes, see [Testing](docs/TESTING.md).
+CI runs all four on every pull request and attaches the `.pbw` files and the debug APK as artifacts. Once a week a [compatibility check](.github/workflows/hermes-compat.yml) reads the latest Hermes source and fails if a route, gateway method, hook or table Wristbound relies on has moved. The [website](site/) deploys from `main`. To click through the watch UI without a phone or Hermes, see [Testing](docs/TESTING.md).
 
 | Path | What's there |
 |------|--------------|
@@ -116,4 +116,4 @@ Replacing Hermes, rebuilding Telegram, changing Ringbearer's working ingress, or
 
 ## License
 
-No license has been selected yet. Public visibility does not grant an open-source license.
+[MIT](LICENSE). The Silkscreen font in the watch app is under the SIL Open Font License ([watch/resources/fonts/OFL.txt](watch/resources/fonts/OFL.txt)).
