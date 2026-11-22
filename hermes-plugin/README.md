@@ -13,8 +13,7 @@ points, so it keeps working across Hermes updates.
 On the machine that runs Hermes:
 
 ```sh
-hermes plugins install AndreasThinks/hermes-wristbound/hermes-plugin/wristbound-voice
-hermes plugins enable wristbound-voice
+hermes plugins install AndreasThinks/hermes-wristbound/hermes-plugin/wristbound-voice --enable
 ```
 
 Or copy `wristbound-voice/` into `~/.hermes/plugins/` and add it to `plugins.enabled` in
