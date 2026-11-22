@@ -111,5 +111,13 @@ Needs the [wristbound-voice Hermes plugin](../hermes-plugin/README.md) installed
 - Send a capture while that chat is busy: it queues, and still gets a voice reply.
 - Break TTS (wrong provider key): one text alert after about 20 seconds, no second buzz.
 - Remove or disable the plugin: the capture still sends once, the receipt says "No voice reply", and Wristbound history loads normally.
+- Name a chat in the capture: only a turn in that chat is spoken. Then send the same words from Telegram within 10 minutes: that reply stays text.
+- Turn the phone's network off and dictate: the receipt says *not sent* within about 10 to 15 seconds, and a later message with the same words is not spoken.
+
+## Approvals, busy checks and Quick Launch acceptance (pending)
+
+- An approval on the watch and in the phone notification offers only *Allow once* and *Deny*. On a locked phone the notification shows "Hermes is asking before a step" without the command, and its actions ask to unlock. The same actions mirrored to the Pebble answer without unlocking.
+- With the watchapp closed, run a long agent turn from the desktop for a few minutes: the companion's checks are about 20 s apart (logcat `Wristbound`), and the turn's reply still alerts within about 25 s of finishing.
+- Choose a Quick Launch destination with the watchapp closed: the companion says it will apply next time. Open Wristbound on the watch: it changes to *Applied on the watch*, and the next Quick Launch press opens the chosen screen. Upgrade from a build where the watch held a choice and the phone none: the watch's choice is kept.
 
 No phone install or hardware acceptance was performed for these changes. Canonical build and device results belong in the workspace REPORT.md, separately from the earlier v0.5.0 results above.

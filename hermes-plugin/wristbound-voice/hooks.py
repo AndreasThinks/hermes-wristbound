@@ -21,7 +21,7 @@ from .store import VoiceStore, default_root
 logger = logging.getLogger(__name__)
 
 Synthesize = Callable[[str, Path], list]
-FindMessage = Callable[[str, str], Optional[str]]
+FindMessage = Callable[[str, str, Optional[float]], Optional[str]]
 
 
 def hermes_synthesize(text: str, directory: Path) -> list:
@@ -43,16 +43,26 @@ def _state_db() -> Path:
         return get_hermes_home() / "state.db"
 
 
-def hermes_find_message(session_id: str, reply: str, db: Optional[Path] = None) -> Optional[str]:
-    """The id of the saved assistant row holding ``reply`` (the newest one), read-only.
+def hermes_find_message(session_id: str, reply: str, since: Optional[float] = None,
+                        db: Optional[Path] = None) -> Optional[str]:
+    """The id of the saved assistant row holding ``reply``, read-only; None when it is not clear.
 
-    ``post_llm_call`` runs after the turn's transcript is saved, so the row is already there."""
+    ``post_llm_call`` runs after the turn's transcript is saved, so the row is already there.
+    Only rows written since the turn started (``since``) are considered. When none holds the reply
+    verbatim (a transform hook rewrote it, say), the turn's newest assistant row is used if the
+    turn wrote one; otherwise None, so a clip is never attached to an older reply."""
     db = db or _state_db()
+    floor = (since - 2.0) if since is not None else None
     try:
         with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)) as conn:
-            rows = conn.execute(
-                "SELECT id, content FROM messages WHERE session_id = ? AND role = 'assistant' "
-                "ORDER BY id DESC LIMIT 5", (session_id,)).fetchall()
+            if floor is None:
+                rows = conn.execute(
+                    "SELECT id, content FROM messages WHERE session_id = ? AND role = 'assistant' "
+                    "ORDER BY id DESC LIMIT 5", (session_id,)).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, content FROM messages WHERE session_id = ? AND role = 'assistant' "
+                    "AND timestamp >= ? ORDER BY id DESC LIMIT 5", (session_id, floor)).fetchall()
     except sqlite3.Error as e:
         logger.debug("wristbound-voice: could not read the session store: %s", e)
         return None
@@ -60,7 +70,8 @@ def hermes_find_message(session_id: str, reply: str, db: Optional[Path] = None) 
     for row_id, content in rows:
         if isinstance(content, str) and content.strip() == wanted:
             return str(row_id)
-    return str(rows[0][0]) if rows else None
+    # Without a start time a mismatch could be any older reply: bind nothing rather than guess.
+    return str(rows[0][0]) if rows and floor is not None else None
 
 
 class VoiceHooks:
@@ -83,13 +94,13 @@ class VoiceHooks:
             return str(turn_id)
         return f"session:{session_id}" if session_id else None
 
-    def pre_llm_call(self, session_id=None, turn_id=None, user_message=None, **_):
+    def pre_llm_call(self, session_id=None, turn_id=None, user_message=None, parent_session_id=None, **_):
         """A turn whose prompt was armed becomes pending. Returns nothing: no context is injected."""
         key = self._key(session_id, turn_id)
         if not key or not session_id:
             return None
         try:
-            if self.store.take_arm(user_message):
+            if self.store.take_arm(user_message, str(session_id), parent_session_id=parent_session_id or None):
                 self.store.start_turn(key, str(session_id))
                 logger.info("wristbound-voice: turn %s in %s will get a voice reply", key, session_id)
         except Exception:
@@ -105,7 +116,8 @@ class VoiceHooks:
             if not self.store.is_pending(key):
                 return None
             text = assistant_response if isinstance(assistant_response, str) else ""
-            self.store.bind_message(key, str(session_id), self.find_message(str(session_id), text))
+            since = self.store.started_at(key)
+            self.store.bind_message(key, str(session_id), self.find_message(str(session_id), text, since))
         except Exception:
             logger.warning("wristbound-voice: could not record the reply", exc_info=True)
             return None

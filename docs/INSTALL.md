@@ -83,13 +83,13 @@ Only Hermes-generated audio is playable: a `text_to_speech` tool result, or a vo
 
 ## Approvals
 
-For a turn started from Wristbound, Hermes may ask before running a command. On supported watches this appears as an approval card; **Deny is selected first**. Up/Down chooses an offered scope, and Select answers. Back dismisses the card without approving it; the conversation lets you reopen it. If the watch app is closed or the model cannot show the card, use the phone notification.
+For a turn started from Wristbound, Hermes may ask before running a command. On supported watches this appears as an approval card; **Deny is selected first**. Up/Down chooses *Allow once* or *Deny*, and Select answers; *Allow session* and *Always allow* are only offered on the desktop. Back dismisses the card without approving it; the conversation lets you reopen it. If the watch app is closed or the model cannot show the card, use the phone notification.
 
-Only approve a command you can fully understand. A watch screen can truncate long details: use the phone or desktop when there is not enough context. **Allow session** and **Always allow** are broader than **Allow once**. Request cancellation or turn completion closes pending prompts. Clarifications, password/sudo/secret prompts and other unsupported requests still need a capable desktop client. Approval handling for turns started elsewhere stays with that surface. Real backend approval round trips remain a hardware acceptance check, not a claim established by the unit tests.
+Only approve a command you can fully understand. A watch screen can truncate long details: use the phone or desktop when there is not enough context. The phone notification's answers need the phone unlocked (the Pebble's mirrored actions do not), and the lock screen hides the command. Request cancellation or turn completion closes pending prompts. Clarifications, password/sudo/secret prompts and other unsupported requests still need a capable desktop client. Approval handling for turns started elsewhere stays with that surface. Real backend approval round trips remain a hardware acceptance check, not a claim established by the unit tests.
 
 ## 6. Quick Launch
 
-First assign Wristbound to a Quick Launch button using the supported Pebble watch/phone settings. Then, **in the Wristbound companion app**, choose under **Watch > Watchapp opens on**:
+First assign Wristbound to a Quick Launch button using the supported Pebble watch/phone settings. Then, **in the Wristbound companion app**, choose under **Watch > Quick Launch opens on**:
 
 - Home
 - Dictate a new session
@@ -97,7 +97,7 @@ First assign Wristbound to a Quick Launch button using the supported Pebble watc
 - Play latest audio
 - Last session
 
-The watch is told at once if the watchapp is open, otherwise the next time it opens. A choice made on the watch in 0.4.0 is kept until you pick one in the companion app.
+The watch is told at once if the watchapp is open, otherwise the next time it opens. The companion shows whether the watch has confirmed the choice (*Applied on the watch*) or will pick it up the next time Wristbound opens there. A choice made on the watch in 0.4.0 is kept until you pick one in the companion app.
 
 It only affects actual hardware Quick Launch starts, not normal launches. **Play latest audio deliberately plays through headphones when connected, otherwise the phone speaker.** Pick Home or Recent audio for a silent shortcut. Ordinary incoming replies do not autoplay.
 
@@ -136,7 +136,7 @@ Without the voice plugin, Index still sends your message, and the receipt says *
 | Watch stays Connecting | Matching APK/PBW versions, Pebble Bluetooth link, companion installed and signed in; use Test connection on the phone. |
 | No incoming alert | Monitoring state, background switch when closed, permissions, text/audio policy, and a new reply after the initial baseline. |
 | Audio marker but no sound | Open the reply's action menu and explicitly choose an output. Audio markers alone do not start playback. |
-| Quick launch seems absent | It is in the companion app under Watch > Watchapp opens on, not on the watch. |
+| Quick launch seems absent | It is in the companion app under Watch > Quick Launch opens on, not on the watch. |
 | Index says *No voice reply* | The voice plugin is not installed or not enabled on the Hermes host, or the dashboard was not restarted after installing it. |
 | APK will not update | Read the signing-certificate warning above; preserve data/sign-in before any uninstall. |
 

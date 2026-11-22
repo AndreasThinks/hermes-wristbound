@@ -50,6 +50,13 @@ class ChangeListener(
     private val awake: suspend (suspend () -> Unit) -> Unit = { it() },
     private val debounceMs: Long = DEBOUNCE_MS,
     private val retryMs: (attempt: Int) -> Long = ::backoff,
+    /**
+     * The least time between two checks started by changes. While Hermes is busy anywhere it
+     * reports a change every couple of seconds; when nobody is waiting on the wrist (watchapp
+     * closed, no turn of ours running) one check every [BUSY_GAP_MS] is plenty. 0 checks each burst.
+     */
+    private val minGapMs: () -> Long = { 0L },
+    private val now: () -> Long = System::currentTimeMillis,
 ) {
     private val _state = MutableStateFlow(Live.OFF)
     val state: StateFlow<Live> = _state
@@ -63,14 +70,19 @@ class ChangeListener(
     @Volatile private var gateway: Gateway? = null
     @Volatile private var key: Any? = null
     private val changes = Channel<Unit>(Channel.CONFLATED)
+    @Volatile private var lastCheck = Long.MIN_VALUE / 2
 
     init {
         scope.launch {
             for (unit in changes) {
                 awake {
-                    // Let a burst settle, then check once for all of it.
+                    // Let a burst settle, then check once for all of it. Held awake through the
+                    // wait: a check put off past the last change of a turn must still run.
                     delay(debounceMs)
+                    val wait = minGapMs() - (now() - lastCheck)
+                    if (wait > 0) delay(wait)
                     changes.tryReceive()
+                    lastCheck = now()
                     runCatching { onChange() }.onFailure { if (it is CancellationException) throw it }
                 }
             }
@@ -191,6 +203,8 @@ class ChangeListener(
         /** Hermes sends at most one change every 2 s; a little longer collects a burst. */
         const val DEBOUNCE_MS = 2_500L
         const val ENSURE_TIMEOUT_MS = 8_000L
+        /** Change-driven checks while nobody waits on the wrist: at most one per 20 s. */
+        const val BUSY_GAP_MS = 20_000L
 
         /** 5 s, 15 s, 1 min, then every 5 min. The alarm checks also retry while down. */
         fun backoff(attempt: Int): Long = when (attempt) {

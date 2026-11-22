@@ -49,6 +49,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import dev.wristbound.companion.R
+import dev.wristbound.companion.core.QuickLaunchSync
 import dev.wristbound.companion.core.Account
 import dev.wristbound.companion.core.AlertKind
 import dev.wristbound.companion.core.AlertPreset
@@ -145,6 +146,7 @@ class MainActivity : AppCompatActivity() {
                 launch { controller.backend.collect { render() } }
                 launch { controller.liveUpdates.collect { render() } }
                 launch { controller.alertLog.collect { render() } }
+                launch { controller.quickLaunch.collect { render() } }
             }
         }
     }
@@ -322,13 +324,21 @@ class MainActivity : AppCompatActivity() {
         val s = controller.settings
         column.addView(button("Open Wristbound on the watch", primary = false) { lifecycleScope.launch { controller.openWatchApp() } })
 
-        column.addView(heading("Opens on"))
+        column.addView(heading("Quick Launch opens on"))
+        column.addView(note(
+            "Used only when Wristbound is started from a Quick Launch button; opening it from the " +
+                "menu always shows Home. Choosing here does not assign the button: do that on the watch, " +
+                "under Settings > Quick Launch.",
+        ))
         val chosen = s.quickLaunch
-        if (chosen == null) column.addView(note("Not chosen here yet, so the watch keeps its own choice."))
+        column.addView(note(when (controller.quickLaunch.value) {
+            QuickLaunchSync.Status.WATCH_OWN -> "Not chosen here yet, so the watch keeps its own choice."
+            QuickLaunchSync.Status.APPLIED -> "Applied on the watch."
+            QuickLaunchSync.Status.PENDING -> "Saved here. The watch picks it up the next time Wristbound opens on it."
+        }))
         QUICK_LAUNCH_CHOICES.forEachIndexed { i, label ->
-            column.addView(option(label, null, chosen == i) {
-                s.quickLaunch = i
-                controller.onWatchSettingsChanged()
+            column.addView(option(label, QUICK_LAUNCH_NOTES[i], chosen == i) {
+                controller.onQuickLaunchChanged(i)
                 draw()
             })
         }
@@ -1196,5 +1206,13 @@ class MainActivity : AppCompatActivity() {
         const val RECENT_ALERTS = 5
         /** In [Protocol.QuickLaunch] order. */
         val QUICK_LAUNCH_CHOICES = listOf("Home", "Dictate a new session", "Recent audio", "Play latest audio", "Last session")
+        /** One line per choice, in the same order. */
+        val QUICK_LAUNCH_NOTES = listOf(
+            "The usual home screen",
+            "Straight into dictation for a new session",
+            "Audio replies from any session, newest first",
+            "Plays the newest audio reply at once: on headphones if connected, otherwise out loud on the phone speaker",
+            "Reopens the conversation you had open",
+        )
     }
 }

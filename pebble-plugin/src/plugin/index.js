@@ -17,6 +17,9 @@ var SESSION_LIST_TTL_MS = 2 * 60 * 1000;
 var REFRESH_MARGIN_S = 120;
 var LEASE_MS = 15000;
 var MAX_MESSAGE = 8000;
+// How long a send waits on the gateway. Before prompt.submit leaves the phone a timeout means
+// "not sent"; after it, "uncertain". Plugin runs are short, so these stay well inside them.
+var TIMEOUTS = { ready: 10000, call: 15000, submit: 20000 };
 // The companion Hermes plugin (hermes-plugin/wristbound-voice) that speaks replies on request.
 var VOICE_PLUGIN = 'wristbound-voice';
 var MESSAGING_SOURCES = ['telegram', 'discord', 'slack', 'whatsapp', 'signal', 'matrix', 'email', 'sms'];
@@ -173,6 +176,8 @@ function isMessagingSource(source) { return MESSAGING_SOURCES.indexOf(String(sou
 function createService(env) {
   var secure = env.secure, local = env.local, http = env.fetch, Socket = env.WebSocket;
   var now = env.now || Date.now;
+  var timeouts = Object.assign({}, TIMEOUTS, env.timeouts || {});
+  var later = env.setTimeout || setTimeout, cancelLater = env.clearTimeout || clearTimeout;
 
   function readLocal(key) { try { return JSON.parse(local.getItem(key)) || null; } catch (e) { return null; } }
   function writeLocal(key, value) {
@@ -426,17 +431,32 @@ function createService(env) {
       var nextId = 1;
       var finished = false;
       var state = { sent: false };
+      // Nothing from Hermes at all: never sent.
+      var readyTimer = later(function () {
+        finish(PluginError('PLUGIN_UNAVAILABLE', 'Hermes did not answer in time; not sent'));
+      }, timeouts.ready);
       function finish(error, value) {
         if (finished) return;
         finished = true;
+        cancelLater(readyTimer);
         try { ws.close(); } catch (e) {}
-        Object.keys(pending).forEach(function (id) { pending[id].reject(PluginError('UNKNOWN', 'closed')); });
-        if (error) reject(error); else resolve(value);
+        Object.keys(pending).forEach(function (id) { cancelLater(pending[id].timer); pending[id].reject(PluginError('UNKNOWN', 'closed')); });
+        if (error) {
+          // Whether prompt.submit had left the phone when this failed, for the caller's clean-up.
+          if (error.sent === undefined) error.sent = state.sent;
+          reject(error);
+        } else resolve(value);
       }
       function call(method, params, isSubmit) {
         return new Promise(function (ok, fail) {
           var id = 'p' + (nextId++);
-          pending[id] = { resolve: ok, reject: fail };
+          var timer = later(function () {
+            delete pending[id];
+            finish(state.sent
+              ? PluginError('UNKNOWN', 'Hermes did not confirm the message in time; check Hermes before sending again')
+              : PluginError('PLUGIN_UNAVAILABLE', 'Hermes did not answer in time; not sent'));
+          }, isSubmit ? timeouts.submit : timeouts.call);
+          pending[id] = { resolve: ok, reject: fail, timer: timer };
           ws.send(JSON.stringify({ jsonrpc: '2.0', id: id, method: method, params: params || {} }));
           if (isSubmit) state.sent = true;
         });
@@ -451,6 +471,7 @@ function createService(env) {
         try { frame = JSON.parse(typeof event.data === 'string' ? event.data : String(event.data)); } catch (e) { return; }
         if (frame.method === 'event') {
           if (frame.params && frame.params.type === 'gateway.ready') {
+            cancelLater(readyTimer);
             Promise.resolve().then(function () { return steps(call, state); })
               .then(function (value) { finish(null, value); }, function (error) { finish(error); });
           }
@@ -465,6 +486,7 @@ function createService(env) {
         var waiter = frame.id != null && pending[frame.id];
         if (!waiter) return;
         delete pending[frame.id];
+        cancelLater(waiter.timer);
         if (frame.error) {
           var rpc = PluginError(state.sent ? 'UNKNOWN' : 'PLUGIN_UNAVAILABLE', (frame.error.message || 'Hermes refused') + (state.sent ? '' : '; not sent'));
           rpc.rpcCode = frame.error.code;
@@ -485,18 +507,31 @@ function createService(env) {
     });
   }
 
-  // True when armed, false when the Hermes plugin is not there (or refused), so the send goes
-  // ahead as text. A sign-in problem still stops the send, as it would at the gateway.
-  async function armVoiceReply(message) {
+  // The arm's id when armed, false when the Hermes plugin is not there (or refused), so the send
+  // goes ahead as text. A sign-in problem still stops the send, as it would at the gateway.
+  // [sessionId], when the chat is known, limits the arm to that chat.
+  async function armVoiceReply(message, sessionId) {
     try {
+      var body = { text: message };
+      if (sessionId) body.session_id = sessionId;
       var armed = await api('/api/plugins/' + VOICE_PLUGIN + '/arm', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: message }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       });
-      return !!(armed && armed.armed === true);
+      if (!armed || armed.armed !== true) return false;
+      return armed.arm_id != null ? armed.arm_id : true;
     } catch (e) {
       if (e.code === 'AUTH_REQUIRED') throw e;
       return false;
     }
+  }
+
+  // The message never reached Hermes: forget its arm, so a later message with the same words
+  // is not spoken by mistake. Best effort; an arm left behind expires on its own.
+  async function cancelVoiceArm(armId) {
+    if (typeof armId !== 'number' && typeof armId !== 'string') return;
+    try {
+      await api('/api/plugins/' + VOICE_PLUGIN + '/arms/' + encodeURIComponent(String(armId)), { method: 'DELETE' });
+    } catch (e) {}
   }
 
   async function sendToAgent(args) {
@@ -517,10 +552,22 @@ function createService(env) {
     // Reply with voice: ask the wristbound-voice Hermes plugin to speak the reply to exactly this
     // message, then send it with the ordinary prompt.submit. Arming first means the turn is
     // never sent twice; if the plugin is missing the message still goes, as text only.
-    var voice = settings().voiceReplies ? await armVoiceReply(message) : null;
+    var voice = settings().voiceReplies ? await armVoiceReply(message, target && target.id) : null;
+    var outcome;
+    try {
+      outcome = await sendPrompt(target, message);
+    } catch (error) {
+      // Only when the message certainly did not go: after prompt.submit left, Hermes may run it.
+      if (voice && (error.sent !== true || error.notSent)) await cancelVoiceArm(voice);
+      throw error;
+    }
+    return receipt(target, message, startPrefs, outcome, voice);
+  }
+
+  async function sendPrompt(target, message) {
     var current = await signedIn();
     var url = await socketUrl(current);
-    var outcome = await gatewaySession(url, async function (call) {
+    return gatewaySession(url, async function (call) {
       var runtime, stored;
       if (target) {
         var resumed = await call('session.resume', { session_id: target.id, omit_messages: true, inline_images: false });
@@ -533,12 +580,19 @@ function createService(env) {
       }
       if (!runtime) throw PluginError('UNKNOWN', 'Hermes did not open the session; not sent');
       var ack = await call('prompt.submit', { session_id: runtime, text: message, queued: true }, true);
-      if (ack.status === 'rejected') throw PluginError('INVALID_ARGS', 'Hermes declined the message; not sent');
+      if (ack.status === 'rejected') {
+        var declined = PluginError('INVALID_ARGS', 'Hermes declined the message; not sent');
+        declined.notSent = true;
+        throw declined;
+      }
       if (ack.status !== 'streaming' && ack.status !== 'queued') {
         throw PluginError('UNKNOWN', 'Hermes did not confirm delivery; check Hermes before sending again');
       }
       return { stored: stored, queued: ack.status === 'queued' };
     });
+  }
+
+  function receipt(target, message, startPrefs, outcome, voice) {
     if (!target && outcome.stored) {
       var savedSettings = settings();
       if (startPrefs.destination === 'ongoing' && savedSettings.destination === 'ongoing' &&

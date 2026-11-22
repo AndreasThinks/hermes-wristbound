@@ -36,7 +36,18 @@ data class ApprovalRequest(
     val command: String,
     val description: String,
     val choices: List<String>,
-)
+) {
+    /**
+     * The answers offered away from the desktop: on the watch and in the phone notification,
+     * which the Pebble mirrors and a locked phone shows. Only a one-off yes or a no: allowing a
+     * command for the whole session, or for good, is a decision for a screen and a keyboard.
+     */
+    val wristChoices: List<String> get() = choices.filter { it in WRIST_CHOICES }.ifEmpty { listOf("deny") }
+
+    companion object {
+        val WRIST_CHOICES = setOf("once", "deny")
+    }
+}
 
 /**
  * Runs one user turn through the Hermes gateway socket, the way the desktop app does:

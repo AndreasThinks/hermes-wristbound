@@ -5,8 +5,9 @@ turn) and the dashboard routes (in the web server process). Nothing here imports
 
 Lifecycle of one spoken reply:
 
-1. ``arm(text)``: a client (the Index plugin) says the next turn whose prompt is ``text`` should
-   be answered with voice. Arms expire after ``ARM_TTL`` and are used at most once.
+1. ``arm(text, session_id)``: a client (the Index plugin) says the next turn whose prompt is
+   ``text`` should be answered with voice; with ``session_id``, only a turn in that session.
+   Arms expire after ``ARM_TTL``, are used at most once, and are cancelled when the send fails.
 2. ``start_turn``: the ``pre_llm_call`` hook found a matching arm. The turn is ``pending`` before
    any reply exists, so clients know audio is coming.
 3. ``bind_message``: ``post_llm_call`` attached the saved assistant row's id.
@@ -39,7 +40,8 @@ CREATE TABLE IF NOT EXISTS arms (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     text TEXT NOT NULL,
     created_at REAL NOT NULL,
-    used_at REAL
+    used_at REAL,
+    session_id TEXT
 );
 CREATE TABLE IF NOT EXISTS turns (
     turn_key TEXT PRIMARY KEY,
@@ -64,6 +66,10 @@ CREATE TABLE IF NOT EXISTS clips (
 _MIME = {".ogg": "audio/ogg", ".opus": "audio/ogg", ".oga": "audio/ogg", ".mp3": "audio/mpeg",
          ".wav": "audio/wav", ".m4a": "audio/mp4", ".aac": "audio/mp4", ".flac": "audio/flac"}
 _CLIP_ID = re.compile(r"^[0-9a-f]{24}$")
+# What Hermes may put in front of the user's words on the way to the model: a bracketed tag
+# ("[Andreas]", "<telegram>") or a short "name:" label. Plain words in front never count, so
+# arming "yes" does not speak the reply to "please answer yes".
+_PREFIX_TAG = re.compile(r"^(\[[^\]]{1,80}\]|<[^>]{1,80}>|\([^)]{1,80}\)|[^\s:]{1,40}:)$")
 
 
 def normalize(text: object) -> str:
@@ -89,12 +95,17 @@ class VoiceStore:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(_SCHEMA)
+        # Stores made by 0.1.0 have no arms.session_id column.
+        if "session_id" not in {r["name"] for r in conn.execute("PRAGMA table_info(arms)")}:
+            conn.execute("ALTER TABLE arms ADD COLUMN session_id TEXT")
         return conn
 
     # -- arms -------------------------------------------------------------------------------------
 
-    def arm(self, text: str, now: Optional[float] = None) -> float:
-        """Arm the next turn whose prompt is ``text``. Returns when the arm expires."""
+    def arm(self, text: str, session_id: Optional[str] = None, now: Optional[float] = None) -> tuple[int, float]:
+        """Arm the next turn whose prompt is ``text`` (in ``session_id``, when given).
+
+        Returns the arm's id, for :meth:`cancel_arm`, and when it expires."""
         now = time.time() if now is None else now
         norm = normalize(text)
         if not norm:
@@ -103,15 +114,35 @@ class VoiceStore:
             raise ValueError("text is too long")
         with closing(self._connect()) as conn:
             conn.execute("DELETE FROM arms WHERE created_at < ?", (now - ARM_TTL,))
-            conn.execute("INSERT INTO arms(text, created_at) VALUES (?, ?)", (norm, now))
-        return now + ARM_TTL
+            cur = conn.execute("INSERT INTO arms(text, created_at, session_id) VALUES (?, ?, ?)",
+                               (norm, now, session_id or None))
+        return cur.lastrowid, now + ARM_TTL
 
-    def take_arm(self, prompt: object, now: Optional[float] = None) -> bool:
-        """Use the oldest live arm matching ``prompt``. True when this turn should be spoken.
+    def cancel_arm(self, arm_id: int) -> bool:
+        """Drop an arm that was never used: the client could not send its message."""
+        with closing(self._connect()) as conn:
+            cur = conn.execute("DELETE FROM arms WHERE id = ? AND used_at IS NULL", (int(arm_id),))
+        return cur.rowcount > 0
 
-        Exact match on the normalized text; a prompt that ends with the armed text also matches,
-        in case Hermes prefixes something (a sender tag) on the way to the model."""
+    @staticmethod
+    def _matches(armed: str, prompt: str) -> bool:
+        """The prompt is the armed text, or the armed text behind a tag Hermes added."""
+        if prompt == armed:
+            return True
+        if not prompt.endswith(" " + armed):
+            return False
+        return bool(_PREFIX_TAG.match(prompt[: -len(armed) - 1].strip()))
+
+    def take_arm(self, prompt: object, session_id: Optional[str] = None, now: Optional[float] = None,
+                 parent_session_id: Optional[str] = None) -> bool:
+        """Use the oldest live arm matching ``prompt`` in ``session_id``. True when this turn should be spoken.
+
+        An arm made for a session only matches a turn in it (or in a session continuing it, such as
+        one Hermes split off when compressing context: ``parent_session_id``); one made for a new
+        session (no id known yet) matches any session. A session's own arms are tried first."""
         now = time.time() if now is None else now
+        own = str(session_id or "")
+        parent = str(parent_session_id or own)
         norm = normalize(prompt)
         if not norm:
             return False
@@ -119,10 +150,10 @@ class VoiceStore:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 rows = conn.execute(
-                    "SELECT id, text FROM arms WHERE used_at IS NULL AND created_at >= ? ORDER BY id",
-                    (now - ARM_TTL,)).fetchall()
-                match = next((r for r in rows if r["text"] == norm), None) or next(
-                    (r for r in rows if norm.endswith(" " + r["text"])), None)
+                    "SELECT id, text, session_id FROM arms WHERE used_at IS NULL AND created_at >= ? "
+                    "AND (session_id IS NULL OR session_id IN (?, ?)) ORDER BY session_id IS NULL, id",
+                    (now - ARM_TTL, own, parent)).fetchall()
+                match = next((r for r in rows if self._matches(r["text"], norm)), None)
                 if match is not None:
                     conn.execute("UPDATE arms SET used_at = ? WHERE id = ?", (now, match["id"]))
                 conn.execute("COMMIT")
@@ -140,6 +171,12 @@ class VoiceStore:
                 "INSERT OR REPLACE INTO turns(turn_key, session_id, status, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?)", (turn_key, session_id, PENDING, now, now))
         self.prune(now)
+
+    def started_at(self, turn_key: str) -> Optional[float]:
+        """When the turn was marked pending, or None for an unknown turn."""
+        with closing(self._connect()) as conn:
+            row = conn.execute("SELECT created_at FROM turns WHERE turn_key = ?", (turn_key,)).fetchone()
+        return None if row is None else row["created_at"]
 
     def is_pending(self, turn_key: str) -> bool:
         with closing(self._connect()) as conn:
