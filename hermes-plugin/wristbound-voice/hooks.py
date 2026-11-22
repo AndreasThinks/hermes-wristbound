@@ -94,13 +94,13 @@ class VoiceHooks:
             return str(turn_id)
         return f"session:{session_id}" if session_id else None
 
-    def pre_llm_call(self, session_id=None, turn_id=None, user_message=None, **_):
+    def pre_llm_call(self, session_id=None, turn_id=None, user_message=None, parent_session_id=None, **_):
         """A turn whose prompt was armed becomes pending. Returns nothing: no context is injected."""
         key = self._key(session_id, turn_id)
         if not key or not session_id:
             return None
         try:
-            if self.store.take_arm(user_message, str(session_id)):
+            if self.store.take_arm(user_message, str(session_id), parent_session_id=parent_session_id or None):
                 self.store.start_turn(key, str(session_id))
                 logger.info("wristbound-voice: turn %s in %s will get a voice reply", key, session_id)
         except Exception:

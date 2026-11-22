@@ -134,3 +134,9 @@ def test_a_0_1_store_gains_the_session_column(home):
     store = VoiceStore(home)
     assert store.take_arm("old", session_id="s1", now=101)
 
+
+
+def test_a_chat_continued_in_a_new_session_still_matches(home):
+    store = VoiceStore(home)
+    store.arm("summarise", session_id="s1", now=100)
+    assert store.take_arm("summarise", session_id="s1-compressed", parent_session_id="s1", now=101)

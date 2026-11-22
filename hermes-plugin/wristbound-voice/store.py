@@ -133,12 +133,16 @@ class VoiceStore:
             return False
         return bool(_PREFIX_TAG.match(prompt[: -len(armed) - 1].strip()))
 
-    def take_arm(self, prompt: object, session_id: Optional[str] = None, now: Optional[float] = None) -> bool:
+    def take_arm(self, prompt: object, session_id: Optional[str] = None, now: Optional[float] = None,
+                 parent_session_id: Optional[str] = None) -> bool:
         """Use the oldest live arm matching ``prompt`` in ``session_id``. True when this turn should be spoken.
 
-        An arm made for a session only matches a turn in it; one made for a new session (no id
-        known yet) matches any session. A session's own arms are tried first."""
+        An arm made for a session only matches a turn in it (or in a session continuing it, such as
+        one Hermes split off when compressing context: ``parent_session_id``); one made for a new
+        session (no id known yet) matches any session. A session's own arms are tried first."""
         now = time.time() if now is None else now
+        own = str(session_id or "")
+        parent = str(parent_session_id or own)
         norm = normalize(prompt)
         if not norm:
             return False
@@ -147,8 +151,8 @@ class VoiceStore:
             try:
                 rows = conn.execute(
                     "SELECT id, text, session_id FROM arms WHERE used_at IS NULL AND created_at >= ? "
-                    "AND (session_id IS NULL OR session_id = ?) ORDER BY session_id IS NULL, id",
-                    (now - ARM_TTL, str(session_id or ""))).fetchall()
+                    "AND (session_id IS NULL OR session_id IN (?, ?)) ORDER BY session_id IS NULL, id",
+                    (now - ARM_TTL, own, parent)).fetchall()
                 match = next((r for r in rows if self._matches(r["text"], norm)), None)
                 if match is not None:
                     conn.execute("UPDATE arms SET used_at = ? WHERE id = ?", (now, match["id"]))
