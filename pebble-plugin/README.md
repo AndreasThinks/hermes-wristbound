@@ -31,9 +31,9 @@ To start fresh from Index, lead with **“New Hermes session, then …”** and 
 
 ## Reply with voice
 
-Turn on **Reply with voice** in Settings and Hermes answers each message you dictate with a voice reply, like `/voice`, which Wristbound alerts with Play. Other messages in the same chat stay text. This needs the [wristbound-voice Hermes plugin](../hermes-plugin/README.md) on your Hermes; without it the plugin sends the message as text and the receipt says “No voice reply”. The message is always sent once, with the normal `prompt.submit`, so it still queues behind a busy chat.
+Turn on **Reply with voice** in Settings and Hermes answers each message you dictate with a voice reply, like `/voice`, which Wristbound alerts with Play. Other messages in the same chat stay text, and a voice request sent to a named chat applies only there. If the message is not sent, the voice request is withdrawn. This needs the [wristbound-voice Hermes plugin](../hermes-plugin/README.md) on your Hermes; without it the plugin sends the message as text and the receipt says “No voice reply”. The message is always sent once, with the normal `prompt.submit`, so it still queues behind a busy chat.
 
-If Ringbearer or another webhook handles the same gesture, use only one delivery route for an actionable request. A connection loss after submission can leave delivery uncertain. Check Hermes before repeating; the plugin does not automatically resend.
+If Ringbearer or another webhook handles the same gesture, use only one delivery route for an actionable request. A connection loss or a Hermes that stops answering after submission can leave delivery uncertain. Check Hermes before repeating; the plugin does not automatically resend. A send gives up after about 10 seconds without Hermes' ready signal, or 15 seconds on any step before the message leaves, and says *not sent*; once the message has left it waits up to 20 seconds for Hermes to confirm, then says to check Hermes.
 
 ## Integration details
 
