@@ -22,7 +22,7 @@ The Store decision reads the live listings (`appstore-api.repebble.com`), not th
 3. Create a GitHub release with tag `vX.Y.Z`, where `X.Y.Z` is the Android `versionName`. The workflow stops if the two differ.
 4. Watch the **Release** run. If the `pebble-store` environment has required reviewers, approve the Store jobs there.
 
-A prerelease gets the attached builds but is never sent to the Pebble Store, including on a manual run, which reads the release's prerelease flag from GitHub. To rebuild an existing release, run **Release** from the Actions tab with its tag. A manual run leaves the Store alone unless you tick *publish_store*.
+A prerelease gets the attached builds but is never sent to the Pebble Store, including on a manual run, which reads the release's prerelease flag from GitHub. To rebuild an existing release, run **Release** from the Actions tab on `main` with its tag. The parts are built from the tag and the release scripts come from `main`, so tags made before this workflow, such as v0.6.12, can be rebuilt too. A manual run leaves the Store alone unless you tick *publish_store*.
 
 ## One-time setup
 

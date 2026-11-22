@@ -1,8 +1,9 @@
 """Decide what a release publishes, for .github/workflows/release.yml.
 
-Usage: python release_plan.py <tag> <prerelease true|false> <publish_store true|false>
+Usage: python release_plan.py <tag> <prerelease true|false> <publish_store true|false> [release source]
 
-Run from the repository root at the release tag. Reads every part's version, checks the tag
+The release source is a checkout of the release tag (default: the current directory). It is
+kept apart from this script so a tag made before the script existed can still be rebuilt. Reads every part's version, checks the tag
 matches the Android versionName, and decides which Pebble Store listings need this release by
 asking the Store which versions it already lists, not by trusting the previous tag: a previous
 release whose Store job failed or was skipped, or that was a prerelease, leaves the listing
@@ -88,8 +89,9 @@ def plan(tag: str, prerelease: bool, publish_store: bool, versions: dict[str, st
 
 def main(argv: list[str]) -> int:
     tag, prerelease, publish_store = argv[1], argv[2] == "true", argv[3] == "true"
+    root = Path(argv[4] if len(argv) > 4 else ".")
     try:
-        result = plan(tag, prerelease, publish_store, read_versions(Path(".")))
+        result = plan(tag, prerelease, publish_store, read_versions(root))
     except PlanError as e:
         print(f"::error::{e}")
         return 1
