@@ -1,7 +1,7 @@
 {
   "name": "hermes-wristbound",
   "author": "Hermes Wristbound",
-  "version": "0.6.7",
+  "version": "0.6.8",
   "keywords": ["pebble-app"],
   "private": true,
   "dependencies": {},
