@@ -2,7 +2,7 @@
 
 A Pebble watchapp and Android companion for using [Hermes Agent](https://github.com/NousResearch/hermes-agent) without taking your phone out: browse sessions, read replies, answer by dictation or quick reply, and play replies through your headphones, all from the wrist.
 
-**Status: experimental public release, Android v0.6.9 / watch v0.6.7.** Reply notifications on the Pebble now lead with a *Reply* action (dictation or a canned answer, sent to that session), and *Open in Wristbound* opens the conversation directly with watch v0.6.7 (see [the release notes](docs/RELEASE-0.6.9.md)); this still needs physical-watch acceptance. Earlier, Android v0.6.6 / watch v0.6.6 added opt-in *Open Wristbound for alerts*: the phone opens the watchapp to show its own banner, with a native-notification fallback if startup or delivery fails. An untouched banner returns to the watchface after 15 seconds. This launch path still needs physical-watch acceptance. Android v0.6.5 also wakes the phone for the 30 s checks while the watchapp is open, keeps checking after a failed check, and adds a *Send a test alert* button. Android v0.6.4 adds alarm-driven background checking, foreground-service keep-alive for turns and phone playback, wake locks and an Allow background use setup control. Existing saved background-checking choices are preserved; new or unset preferences default on. Real-device Doze, reboot and screen-off playback acceptance remains pending. The v0.6.6 watchapp adds phone-launch splash bypass and untouched-alert expiry; protocol v5 is unchanged. Android v0.6.2 adds readable markdown-to-watch formatting; watch v0.6.1 adds bold banner headlines, an AUDIO tag and a Select hint. Both remain on protocol v5. Earlier v0.5.0 session browsing and phone/headphone playback were exercised on a Pixel 9a with Hermes 0.22.2 and a Pebble Time 2. This release adds conversation-aware native Pebble notifications with silent-phone defaults and discovery of retained automatic Hermes voice replies, including replies to Ringbearer captures. It requires the backend automatic-reply-audio extension as well as the updated Android APK. These new paths pass host regression tests but still require locked-phone, watchface-visible notification and exact-audio playback acceptance on hardware. Android may retain silent shade and background-service notifications; forwarding depends on Pebble settings and user channel overrides. Watch-speaker sound, forced phone-speaker routing with headphones attached, and hardware Quick Launch also need dedicated acceptance checks. All seven watch targets build; this does not establish hardware testing on every model. See [installation and setup](docs/INSTALL.md) and [the test plan](docs/TESTING.md).
+**Status: experimental public release, Android v0.6.9 / watch v0.6.7.** Reply notifications on the Pebble now lead with a *Reply* action (dictation or a canned answer, sent to that session), and *Open in Wristbound* opens the conversation directly with watch v0.6.7 (see [the release notes](docs/RELEASE-0.6.9.md)); this still needs physical-watch acceptance. Earlier, Android v0.6.6 / watch v0.6.6 added opt-in *Open Wristbound for alerts*: the phone opens the watchapp to show its own banner, with a native-notification fallback if startup or delivery fails. An untouched banner returns to the watchface after 15 seconds. This launch path still needs physical-watch acceptance. Android v0.6.5 also wakes the phone for the 30 s checks while the watchapp is open, keeps checking after a failed check, and adds a *Send a test alert* button. Android v0.6.4 adds alarm-driven background checking, foreground-service keep-alive for turns and phone playback, wake locks and an Allow background use setup control. Existing saved background-checking choices are preserved; new or unset preferences default on. Real-device Doze, reboot and screen-off playback acceptance remains pending. The v0.6.6 watchapp adds phone-launch splash bypass and untouched-alert expiry; protocol v5 is unchanged. Android v0.6.2 adds readable markdown-to-watch formatting; watch v0.6.1 adds bold banner headlines, an AUDIO tag and a Select hint. Both remain on protocol v5. Earlier v0.5.0 session browsing and phone/headphone playback were exercised on a Pixel 9a with Hermes 0.22.2 and a Pebble Time 2. This release adds conversation-aware native Pebble notifications with silent-phone defaults. Voice replies to messages dictated through Index come from the optional [wristbound-voice Hermes plugin](hermes-plugin/README.md); no modified Hermes is needed. These new paths pass host regression tests but still require locked-phone, watchface-visible notification and exact-audio playback acceptance on hardware. Android may retain silent shade and background-service notifications; forwarding depends on Pebble settings and user channel overrides. Watch-speaker sound, forced phone-speaker routing with headphones attached, and hardware Quick Launch also need dedicated acceptance checks. All seven watch targets build; this does not establish hardware testing on every model. See [installation and setup](docs/INSTALL.md) and [the test plan](docs/TESTING.md).
 
 **Android companion required.** The watch app is not standalone and does not include a hosted Hermes service. Install the watch app from the [Pebble Store](https://apps.repebble.com/22984baa50dd4b68ba9a0945), then download the matched Android APK from [GitHub Releases](https://github.com/AndreasThinks/hermes-wristbound/releases/latest) and follow the [setup guide](docs/INSTALL.md). The companion is currently a sideloaded debug APK, not a Play Store app.
 
@@ -54,6 +54,8 @@ Android companion  (android/, Kotlin)
 Hermes  (authoritative sessions, turns, audio)
 
 Pebble Index -> Ringbearer -> Telegram -> Hermes session  (unchanged; Wristbound reads and plays it)
+Pebble Index -> Hermes for Index (pebble-plugin/) -> Hermes  (optional "Reply with voice")
+Hermes + wristbound-voice plugin (hermes-plugin/) -> voice clips Wristbound plays
 ```
 
 The phone talks to Hermes the way the Hermes desktop app and Hermes-Relay do: it signs in to the dashboard and runs turns over the dashboard's gateway socket. That is what lets the watch continue Telegram, desktop and CLI sessions and play the audio Hermes generated, rather than starting separate API sessions. The watch never holds credentials; it only shows what the phone sends it. Telegram is not needed as a client or a player.
@@ -84,6 +86,7 @@ The phone talks to Hermes the way the Hermes desktop app and Hermes-Relay do: it
 - Plays a reply on headphones or on the phone's speaker, whichever the watch picked: Hermes' own audio for that reply. Only replies that carry Hermes audio offer Play; text replies are never read aloud. Headphone playback pauses when they disconnect instead of switching to the speaker; speaker playback is always explicit and uses the phone's speaker even while headphones are connected. The watch is told whenever headphones connect or disconnect.
 - Chooses which sessions the watch lists: chats on this machine always, messaging chats (Telegram, Discord, Slack…) by default, scheduled and automation sessions (cron, Kanban, webhooks, subagents) only when asked; pinned sessions first.
 - One alert policy for every delivery path, decided by what a reply answers: a voice reply from any session, a reply to a message sent from the watch, a reply in a desktop or terminal chat, a text reply in a messaging chat (off by default), or background work (scheduled sessions, and Hermes following up on its own tasks; off by default). Each has its own switch, under one master switch, alongside replying to Telegram sessions, tool activity and notification privacy. Polling checkpoints persist, so a failed fetch or a restart never loses or repeats an alert.
+- Voice replies from the wristbound-voice Hermes plugin: a reply whose clip is still being made waits up to 20 s so its one alert already offers Play; after that it alerts as text and the clip joins history without a second buzz.
 - Bounded offline conversation/audio caches on the phone; the watch never stores dashboard credentials.
 
 ## Setup
@@ -102,7 +105,7 @@ Every pull request builds both: the watch `.pbw` and the debug APK are attached 
 - **Replies from other surfaces are polled**, not pushed: every 30 s while the watchapp is open, and every 30 s to 5 min with background checking on. In deep Doze Android spaces the checks out further (about every 9 minutes, sooner with *Allow background use*).
 - **Clarifications and password prompts** that Hermes asks for mid-turn must be answered from another client; the watch shows that the turn is waiting. Approvals are answered on the watch, but only in turns sent from the watch.
 - A watch reply in a Telegram session is stored in that session, as a desktop reply is; it is not posted into the Telegram chat. Replies to Telegram sessions can be turned off.
-- **Automatic voice needs the matching Hermes changes.** The companion reads retained automatic speech attached to the exact assistant reply, including ordered split files. Unmodified servers and already-deleted historical audio cannot supply it. Wristbound never synthesizes replacement speech. This unreleased implementation has local regression coverage; native notifications and routing require hardware acceptance.
+- **Voice replies need a Hermes plugin.** With *Reply with voice* on in the Index plugin, the [wristbound-voice Hermes plugin](hermes-plugin/README.md) speaks the reply to each dictated message with your Hermes TTS, and Wristbound alerts once with Play. Telegram's own `/voice` replies are deleted by Hermes after sending, so they cannot be played here. Wristbound never synthesizes replacement speech.
 - **Watch speaker playback is untested on hardware.** It works in the emulator up to the point of sound (the emulator has none). Audio is 8 kHz 8-bit to fit Bluetooth, so expect phone-call quality, and a slow link drops back to buffering mid-clip.
 - Incoming replies do not autoplay. The optional **Play latest audio** Quick Launch action deliberately starts playback and may use the phone speaker when headphones are absent.
 
@@ -116,9 +119,13 @@ cd watch && pebble build            # -> watch/build/watch.pbw, for aplite, basa
 
 # Android companion (JDK 21, Android SDK platform 37; PebbleKit Android 2 requires compileSdk 37)
 cd android && ./gradlew testDebugUnitTest assembleDebug   # -> android/app/build/outputs/apk/debug/
+
+# Hermes for Index (Pebble plugin) and the wristbound-voice Hermes plugin
+cd pebble-plugin && node --test test/*.test.js && pebble build
+cd hermes-plugin && pip install pytest fastapi httpx && python -m pytest tests
 ```
 
-CI runs both on every pull request (`.github/workflows/build.yml`). To click through the watch UI without a phone or Hermes, run it in the emulator against `watch/tools/fake_phone.py`; [docs/TESTING.md](docs/TESTING.md) has the steps, including how the screenshots above were taken.
+CI runs all of these on every pull request (`.github/workflows/build.yml`). To click through the watch UI without a phone or Hermes, run it in the emulator against `watch/tools/fake_phone.py`; [docs/TESTING.md](docs/TESTING.md) has the steps, including how the screenshots above were taken.
 
 ### Layout
 
@@ -131,6 +138,8 @@ CI runs both on every pull request (`.github/workflows/build.yml`). To click thr
 | `android/.../pebble/` | Watch link, protocol codec and text fitting |
 | `android/.../playback/` | Reply playback and speech chunking |
 | `android/.../sync/`, `notify/`, `ui/` | Background sync, notifications and actions, settings screen |
+| `pebble-plugin/` | Hermes for Index: a Pebble plugin that sends Index captures to Hermes ([README](pebble-plugin/README.md)) |
+| `hermes-plugin/wristbound-voice/` | Hermes plugin that speaks the reply to a dictated capture ([README](hermes-plugin/README.md)) |
 
 ## Documentation
 
@@ -140,6 +149,8 @@ CI runs both on every pull request (`.github/workflows/build.yml`). To click thr
 - [Watch ↔ phone protocol](docs/PROTOCOL.md): AppMessage keys, commands and rules.
 - [Testing](docs/TESTING.md): automated checks, the emulator harness and the real-device plan.
 - [Milestones](docs/MILESTONES.md): acceptance criteria and current status.
+- [Hermes for Index](pebble-plugin/README.md): the Pebble plugin, including *Reply with voice*.
+- [wristbound-voice](hermes-plugin/README.md): the Hermes plugin behind voice replies, its routes and storage.
 
 ## Not in scope
 

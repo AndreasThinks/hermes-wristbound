@@ -17,6 +17,8 @@ var SESSION_LIST_TTL_MS = 2 * 60 * 1000;
 var REFRESH_MARGIN_S = 120;
 var LEASE_MS = 15000;
 var MAX_MESSAGE = 8000;
+// The companion Hermes plugin (hermes-plugin/wristbound-voice) that speaks replies on request.
+var VOICE_PLUGIN = 'wristbound-voice';
 var MESSAGING_SOURCES = ['telegram', 'discord', 'slack', 'whatsapp', 'signal', 'matrix', 'email', 'sms'];
 var NEW = ['new', 'new session', 'new chat', 'new task'];
 
@@ -483,6 +485,20 @@ function createService(env) {
     });
   }
 
+  // True when armed, false when the Hermes plugin is not there (or refused), so the send goes
+  // ahead as text. A sign-in problem still stops the send, as it would at the gateway.
+  async function armVoiceReply(message) {
+    try {
+      var armed = await api('/api/plugins/' + VOICE_PLUGIN + '/arm', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: message }),
+      });
+      return !!(armed && armed.armed === true);
+    } catch (e) {
+      if (e.code === 'AUTH_REQUIRED') throw e;
+      return false;
+    }
+  }
+
   async function sendToAgent(args) {
     var message = String((args && args.message) || '').trim();
     if (!message) throw PluginError('INVALID_ARGS', 'Nothing to send');
@@ -498,6 +514,10 @@ function createService(env) {
     if (target && isMessagingSource(target.source) && settings().messagingReadOnly) {
       throw PluginError('INVALID_ARGS', '"' + target.title + '" is a ' + target.source + ' chat; reply there instead');
     }
+    // Reply with voice: ask the wristbound-voice Hermes plugin to speak the reply to exactly this
+    // message, then send it with the ordinary prompt.submit. Arming first means the turn is
+    // never sent twice; if the plugin is missing the message still goes, as text only.
+    var voice = settings().voiceReplies ? await armVoiceReply(message) : null;
     var current = await signedIn();
     var url = await socketUrl(current);
     var outcome = await gatewaySession(url, async function (call) {
@@ -512,7 +532,6 @@ function createService(env) {
         stored = created.stored_session_id;
       }
       if (!runtime) throw PluginError('UNKNOWN', 'Hermes did not open the session; not sent');
-      // queued=true waits behind a running turn instead of redirecting it, as the companion does.
       var ack = await call('prompt.submit', { session_id: runtime, text: message, queued: true }, true);
       if (ack.status === 'rejected') throw PluginError('INVALID_ARGS', 'Hermes declined the message; not sent');
       if (ack.status !== 'streaming' && ack.status !== 'queued') {
@@ -536,7 +555,8 @@ function createService(env) {
     }
     var where = target ? (target.ongoing ? 'your ongoing Index conversation' : '"' + target.title + '"') : 'a new Hermes session';
     return {
-      text: (outcome.queued ? 'Queued for ' : 'Sent to ') + where + '.',
+      text: (outcome.queued ? 'Queued for ' : 'Sent to ') + where + '.' +
+        (voice === false ? ' No voice reply: the Hermes voice plugin is not set up.' : ''),
       refreshed: ['agent/chats', 'hermes/status'],
       session_id: outcome.stored || null,
     };
@@ -628,6 +648,7 @@ function createService(env) {
       base: current ? current.base : (s.base || ''), kind: current ? current.kind : null,
       username: current && current.username || null,
       destination: s.destination || 'new', ongoingSessionId: s.ongoingSessionId || null, messagingReadOnly: !!s.messagingReadOnly,
+      voiceReplies: !!s.voiceReplies,
     };
   }
 
@@ -678,6 +699,10 @@ function createService(env) {
     }
     if (type === 'messagingReadOnly') {
       writeLocal(SETTINGS, Object.assign(settings(), { messagingReadOnly: !!message.value }));
+      return status();
+    }
+    if (type === 'voiceReplies') {
+      writeLocal(SETTINGS, Object.assign(settings(), { voiceReplies: !!message.value }));
       return status();
     }
     throw PluginError('INVALID_REQUEST', 'Unknown settings message');

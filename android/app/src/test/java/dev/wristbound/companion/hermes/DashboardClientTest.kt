@@ -98,11 +98,13 @@ class DashboardClientTest {
         server.enqueue(MockResponse().setBody("""{"session_id":"s1","messages":[
             {"id":7,"role":"assistant","content":"Done.","timestamp":2.0},
             {"id":6,"role":"user","content":"Do it","timestamp":1.0}],"pagination":{}}"""))
+        server.enqueue(MockResponse().setResponseCode(404).setBody("""{"detail":"Not Found"}"""))
         val messages = client(MemoryStore(Credentials.SessionToken("tok"))).recentMessages("s 1", 10)
         val req = server.takeRequest()
         assertEquals("tok", req.getHeader("X-Hermes-Session-Token"))
         assertNull(req.getHeader("Authorization"))
-        assertEquals("/api/sessions/s%201/messages?limit=10&order=latest&inline_images=false&include_audio=true", req.path)
+        assertEquals("/api/sessions/s%201/messages?limit=10&order=latest&inline_images=false", req.path)
+        assertEquals("/api/plugins/wristbound-voice/sessions/s%201/replies", server.takeRequest().path)
         assertEquals(listOf("6", "7"), messages.map { it.stableId })
     }
 
@@ -264,19 +266,47 @@ class DashboardClientTest {
     }
 
     @Test
-    fun retainedAudioUsesAuthenticatedOpaqueRouteAndMergesOlderOwner() = runBlocking {
+    fun voiceRepliesFromThePluginJoinTheirRowsAndPlayThroughIt() = runBlocking {
         val client = client(MemoryStore(native("at-1")))
-        server.enqueue(MockResponse().setBody("""{"messages":[{"id":3,"role":"assistant","content":"later"}],
-          "audio_messages":[{"id":1,"role":"assistant","content":"answer","audio_attachments":[
-            {"id":"abc.ogg","mime_type":"audio/ogg","created_at":20}]}]}"""))
-        val rows = client.recentMessages("s", 1)
-        assertEquals(listOf("1", "3"), rows.map { it.stableId })
-        assertTrue(server.takeRequest().path!!.contains("include_audio=true"))
+        server.enqueue(MockResponse().setBody("""{"messages":[
+            {"id":4,"role":"assistant","content":"later answer","timestamp":30.0},
+            {"id":3,"role":"user","content":"and now?","timestamp":29.0},
+            {"id":2,"role":"assistant","content":"first answer","timestamp":20.0},
+            {"id":1,"role":"user","content":"capture","timestamp":19.0}]}"""))
+        server.enqueue(MockResponse().setBody("""{"session_id":"s","replies":[
+            {"turn_id":"t2","session_id":"s","message_id":"4","status":"pending","created_at":29.0,"clips":[]},
+            {"turn_id":"t1","session_id":"s","message_id":"2","status":"ready","created_at":19.0,
+             "clips":[{"id":"0123456789abcdef01234567","part":0,"mime_type":"audio/ogg","created_at":22.0}]}]}"""))
+        val rows = client.recentMessages("s", 10)
+        server.takeRequest()
+        assertEquals("Bearer at-1", server.takeRequest().getHeader("Authorization"))
+        val byId = rows.associateBy { it.stableId }
+        assertEquals(listOf("0123456789abcdef01234567"), byId.getValue("2").audio_attachments.map { it.id })
+        assertTrue(byId.getValue("4").audio_pending)
+        assertTrue(!byId.getValue("2").audio_pending)
+
         server.enqueue(MockResponse().setBody("fixture-audio"))
-        val clip = client.fetchAudio("attachment:abc.ogg", tmp.root)
-        val request = server.takeRequest()
-        assertEquals("/api/reply-audio/abc.ogg", request.path)
-        assertEquals("Bearer at-1", request.getHeader("Authorization"))
+        val clip = client.fetchAudio("attachment:0123456789abcdef01234567", tmp.root)
+        assertEquals("/api/plugins/wristbound-voice/clips/0123456789abcdef01234567", server.takeRequest().path)
         assertEquals("fixture-audio", clip.file.readText())
+    }
+
+    @Test
+    fun withoutThePluginHistoryStillLoadsAndThePluginIsNotAskedAgainForAWhile() = runBlocking {
+        val client = client(MemoryStore(native("at-1")))
+        server.enqueue(MockResponse().setBody("""{"messages":[{"id":1,"role":"assistant","content":"hi"}]}"""))
+        server.enqueue(MockResponse().setResponseCode(404))
+        server.enqueue(MockResponse().setBody("""{"messages":[{"id":1,"role":"assistant","content":"hi"}]}"""))
+        assertEquals(1, client.recentMessages("s", 5).size)
+        assertEquals(1, client.recentMessages("s", 5).size)
+        assertEquals(3, server.requestCount)
+    }
+
+    @Test
+    fun aBrokenPluginAnswerNeverBreaksHistory() = runBlocking {
+        val client = client(MemoryStore(native("at-1")))
+        server.enqueue(MockResponse().setBody("""{"messages":[{"id":1,"role":"assistant","content":"hi"}]}"""))
+        server.enqueue(MockResponse().setResponseCode(500))
+        assertEquals(listOf("1"), client.recentMessages("s", 5).map { it.stableId })
     }
 }

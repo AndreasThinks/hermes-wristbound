@@ -38,6 +38,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -779,7 +780,7 @@ class Wristbound private constructor(context: Context) {
      * One background check for replies that arrived through other paths (Telegram, Ringbearer,
      * desktop) or after the phone lost a stream. See [ReplyAlerts.poll] for the checkpoints.
      */
-    suspend fun pollOnce() = pollMutex.withLock {
+    suspend fun pollOnce(followUp: Boolean = true) = pollMutex.withLock {
         val api = api() ?: return@withLock
         val sessions = try {
             fetchSessions(api)
@@ -794,9 +795,31 @@ class Wristbound private constructor(context: Context) {
                 noteAudio(sessionsById[id], it)
             }
         }
+        if (followUp) followUpForVoice()
         if (moved.isNotEmpty() && watchOpen) {
             pushSessions()
             state.openSessionId?.let { open -> if (open in moved) pushMessages(open) }
+        }
+    }
+
+    /** The follow-up checks while a reply waits for its voice; at most one runs. */
+    @Volatile private var voiceFollowUp: Job? = null
+
+    /**
+     * A reply is held back until Hermes finishes speaking it ([ReplyAlerts.waitingForVoice]).
+     * Check again every few seconds, holding the CPU awake, until it alerts. The alert logic caps
+     * the wait, so this ends within [ReplyAlerts.VOICE_WAIT_MS] plus one check.
+     */
+    private fun followUpForVoice() {
+        if (!alerts.waitingForVoice || voiceFollowUp?.isActive == true) return
+        voiceFollowUp = scope.launch {
+            awake(ReplyAlerts.VOICE_WAIT_MS + CHECK_TIMEOUT_MS) {
+                val deadline = System.currentTimeMillis() + ReplyAlerts.VOICE_WAIT_MS + VOICE_CHECK_MS
+                while (alerts.waitingForVoice && System.currentTimeMillis() < deadline) {
+                    delay(VOICE_CHECK_MS)
+                    withTimeoutOrNull(CHECK_TIMEOUT_MS) { pollOnce(followUp = false) }
+                }
+            }
         }
     }
 
@@ -936,6 +959,8 @@ class Wristbound private constructor(context: Context) {
         private const val LISTEN_WAKE_MS = 40_000L
         private const val FIRST_ALARM_SECONDS = 5
         private const val CHECK_TIMEOUT_MS = 30_000L
+        /** How often a reply waiting for its voice is checked again. */
+        private const val VOICE_CHECK_MS = 3_000L
 
         @Volatile private var instance: Wristbound? = null
 

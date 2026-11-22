@@ -267,6 +267,59 @@ test('latest destination skips messaging chats if read-only and never guesses wh
   assert.equal(f.socketLog.filter(x => x.method === 'session.create').length, 0);
 });
 
+const ARM = 'POST /api/plugins/wristbound-voice/arm';
+
+test('reply with voice arms the exact message, then sends the stock prompt.submit', async () => {
+  const armed = [];
+  const f = fixture({ routes: { [ARM]: (init) => { armed.push(JSON.parse(init.body)); return json({ armed: true, expires_at: 1 }); } } });
+  const initial = await f.service.config({ type: 'status' });
+  assert.equal(initial.voiceReplies, false);
+  await f.signIn();
+  await f.service.action({ action: 'send_to_agent', args: { message: 'default' } });
+  assert.equal(armed.length, 0, 'off by default: nothing is armed');
+  const enabled = await f.service.config({ type: 'voiceReplies', value: true });
+  assert.equal(enabled.voiceReplies, true);
+  const receipt = await f.service.action({ action: 'send_to_agent', args: { message: 'New Hermes session, then what is on today?' } });
+  assert.equal(receipt.text, 'Sent to a new Hermes session.');
+  assert.deepEqual(armed, [{ text: 'what is on today?' }]);
+  const submits = f.socketLog.filter(x => x.method === 'prompt.submit');
+  assert.deepEqual(submits.map(x => x.params), [
+    { session_id: 'rt-new', text: 'default', queued: true },
+    { session_id: 'rt-new', text: 'what is on today?', queued: true },
+  ]);
+  // Armed before the send, never after.
+  const order = f.calls.map(c => c.key);
+  assert.ok(order.indexOf(ARM) < order.lastIndexOf('POST /api/auth/ws-ticket'));
+});
+
+test('a voice capture to a busy chat still queues', async () => {
+  const f = fixture({
+    routes: { [ARM]: () => json({ armed: true }) },
+    gateway: { 'prompt.submit': (p) => { assert.equal(p.queued, true); return { status: 'queued' }; } },
+  });
+  await f.signIn();
+  await f.service.config({ type: 'voiceReplies', value: true });
+  const receipt = await f.service.action({ action: 'send_to_agent', args: { message: 'later' } });
+  assert.match(receipt.text, /^Queued for /);
+});
+
+test('without the Hermes voice plugin the message is sent once, as text', async () => {
+  const f = fixture({ routes: { [ARM]: () => json({ detail: 'Not Found' }, 404) } });
+  await f.signIn();
+  await f.service.config({ type: 'voiceReplies', value: true });
+  const receipt = await f.service.action({ action: 'send_to_agent', args: { message: 'plain text' } });
+  assert.equal(f.socketLog.filter(x => x.method === 'prompt.submit').length, 1);
+  assert.equal(receipt.text, 'Sent to a new Hermes session. No voice reply: the Hermes voice plugin is not set up.');
+});
+
+test('a sign-in failure while arming stops the send', async () => {
+  const f = fixture({ routes: { [ARM]: () => json({ detail: 'Unauthorized' }, 403) } });
+  await f.signIn();
+  await f.service.config({ type: 'voiceReplies', value: true });
+  await assert.rejects(f.service.action({ action: 'send_to_agent', args: { message: 'hi' } }), /rejected the sign-in/);
+  assert.equal(f.socketLog.filter(x => x.method === 'prompt.submit').length, 0);
+});
+
 test('a queued prompt says so', async () => {
   const f = fixture({ gateway: { 'prompt.submit': () => ({ status: 'queued' }) } });
   await f.signIn();

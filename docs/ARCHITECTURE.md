@@ -31,6 +31,8 @@ A watch reply runs like this: the watch sends a submit command with the session 
 
 Replies that start elsewhere (Telegram, Ringbearer, the desktop) are found by polling the session list. The controller owns the schedule: every check is an exact alarm under a short wakelock, every 30 s while the watchapp is open and at the chosen interval while it is closed with background checking on (the default). A coroutine timer stops while the CPU sleeps, and the Pebble app's binding keeps the process alive but not the CPU awake; a check that fails still schedules the next one. One foreground service keeps the process running whenever there is a reason (`KeepAlive`): background checking, a turn sent from the watch that has not finished, or a reply playing on the phone; it also holds the CPU while a turn streams and checks again when the network returns. Every delivery path goes through the same alert policy, which decides whether a reply alerts, alerts as audio, or updates silently, and records a checkpoint so it alerts once.
 
+Voice replies to Index captures are made on the Hermes side by the [wristbound-voice plugin](../hermes-plugin/README.md), using only Hermes plugin hooks and dashboard plugin routes. The Index plugin arms one exact prompt before sending it; the plugin marks that turn pending before it runs and speaks the saved reply afterwards. `DashboardClient` merges the plugin's records onto transcript rows (clips, or a pending flag), and the alert policy holds a pending reply for up to 20 s, re-checking every 3 s, so its single alert already offers Play.
+
 The decisions behind these choices, and why the Hermes API server is not used, are in [HERMES_API.md](HERMES_API.md).
 
 ## Component responsibilities
