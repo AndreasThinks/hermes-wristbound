@@ -26,6 +26,10 @@ dashboard as the companion ([docs/HERMES_API.md](../docs/HERMES_API.md)).
 
 To start fresh from Index, lead with **“New Hermes session, then …”** and say your message. The plugin removes the command before sending if the transcript preserves it. Mentioning a new session later in the message does not switch chats. You can also name a chat for a one-off send; using Latest can then follow that chat if it becomes the most recently active. Latest skips archived, hidden and automation chats, and respects **Don't send into Telegram and other messaging chats**.
 
+## Reply with voice
+
+Turn on **Reply with voice** in Settings and Hermes answers each message you dictate with a voice reply, like `/voice`, which Wristbound alerts with Play. Other messages in the same chat stay text. This needs the [wristbound-voice Hermes plugin](../hermes-plugin/README.md) on your Hermes; without it the plugin sends the message as text and the receipt says “No voice reply”. The message is always sent once, with the normal `prompt.submit`, so it still queues behind a busy chat.
+
 If Ringbearer or another webhook handles the same gesture, use only one delivery route for an actionable request. A connection loss after submission can leave delivery uncertain. Check Hermes before repeating; the plugin does not automatically resend.
 
 ## Integration details
@@ -57,5 +61,5 @@ To try it on a phone, sideload `build/pebble-plugin.pbw` in a plugin-capable Peb
 - **Approvals.** A turn sent from the plugin has no client attached that can answer approvals. The
   plugin declines them (code 4404) so the desktop or terminal can answer. With no other client
   attached, Hermes gives up and the step is not approved.
-- **No audio.** Plugins cannot play audio on the phone.
+- **No audio here.** Plugins cannot play audio on the phone; voice replies play through Wristbound.
 - **Device coverage.** Password sign-in, direct delivery, fresh sessions and continuation were tested on an Android Pixel and Index with a compatible Hermes server. Speech transcription was imperfect. Latest mode was verified in the fixture, not on physical hardware. iOS is unverified.

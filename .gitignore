@@ -30,3 +30,4 @@ media-cache/
 # Pebble SDK (waf)
 .lock-waf*
 watch/screenshots/
+.pytest_cache/

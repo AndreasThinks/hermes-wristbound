@@ -36,7 +36,8 @@ class ReplyAlertsTest {
     private var deliveryFailures = 0
     private val attempts = mutableListOf<String>()
     private val log = mutableListOf<AlertRecord>()
-    private fun dispatcher(s: AlertStore = store) = ReplyAlerts(s, { policy }, log = { log += it }, now = { 1_000L }) {
+    private var clock = 1_000L
+    private fun dispatcher(s: AlertStore = store) = ReplyAlerts(s, { policy }, log = { log += it }, now = { clock }) {
         attempts += it.messageId
         if (deliveryFailures > 0) { deliveryFailures--; false } else { alerts += it; true }
     }
@@ -68,6 +69,61 @@ class ReplyAlertsTest {
     private fun speech(id: Int, ts: Double) = msg(
         """{"id":$id,"role":"tool","tool_name":"text_to_speech","timestamp":$ts,"content":"{\"success\": true, \"media_tag\": \"MEDIA:/home/h/.hermes/cache/audio/tts_$id.ogg\"}"}""",
     )
+
+    private fun voiceAnswer(id: Int, ts: Double, pending: Boolean, clip: String? = null) = msg(
+        """{"id":$id,"role":"assistant","content":"It is sunny.","timestamp":$ts,"audio_pending":$pending,""" +
+            """"audio_attachments":[${clip?.let { """{"id":"$it","mime_type":"audio/ogg","created_at":${ts + 3}}""" } ?: ""}]}""",
+    )
+
+    @Test
+    fun aVoiceReplyWaitsForItsClipThenAlertsOnceWithPlay() = runTest {
+        session("chat", "webui", 10.0)
+        val d = dispatcher()
+        poll(d)
+        append("chat", 20.0, user(1, 19.0, "weather?"), voiceAnswer(2, 20.0, pending = true))
+        poll(d)
+        assertEquals(emptyList<ReplyAlert>(), alerts)
+        assertTrue(d.waitingForVoice)
+        clock += 4_000
+        transcripts["chat"] = transcripts.getValue("chat").dropLast(1) + voiceAnswer(2, 20.0, pending = false, clip = "c1")
+        poll(d)
+        assertEquals(listOf(true to false), alerts.map { it.hasAudio to it.silent })
+        assertFalse(d.waitingForVoice)
+        poll(d)
+        assertEquals(1, alerts.size)
+    }
+
+    @Test
+    fun aVoiceReplyAlertsAsTextAfterTheWaitAndNeverBuzzesAgain() = runTest {
+        session("chat", "webui", 10.0)
+        val d = dispatcher()
+        poll(d)
+        append("chat", 20.0, user(1, 19.0, "weather?"), voiceAnswer(2, 20.0, pending = true))
+        poll(d)
+        clock += ReplyAlerts.VOICE_WAIT_MS - 1
+        poll(d)
+        assertEquals(emptyList<ReplyAlert>(), alerts)
+        clock += 2
+        poll(d)
+        assertEquals(listOf(false), alerts.map { it.hasAudio })
+        assertFalse(d.waitingForVoice)
+        // The clip lands late: history gets it, the watch does not buzz again.
+        transcripts["chat"] = transcripts.getValue("chat").dropLast(1) + voiceAnswer(2, 20.0, pending = false, clip = "c1")
+        sessions["chat"] = sessions.getValue("chat").copy(last_active = 25.0)
+        poll(d)
+        assertEquals(1, alerts.size)
+    }
+
+    @Test
+    fun repliesNotWaitingForVoiceAlertRightAway() = runTest {
+        session("chat", "webui", 10.0)
+        val d = dispatcher()
+        poll(d)
+        append("chat", 20.0, user(1, 19.0), answer(2, 20.0))
+        poll(d)
+        assertEquals(1, alerts.size)
+        assertFalse(d.waitingForVoice)
+    }
 
     @Test
     fun ringbearerCaptureInTelegramAlertsOnceForItsAudioReply() = runTest {

@@ -56,8 +56,8 @@
   <p id="destination-help"></p>
   <p>To start fresh from Index, say “New Hermes session, then …” followed by your message. Name a chat to send there once.</p>
   <div class="row"><input id="readonly" type="checkbox"><label for="readonly" style="margin:0;font-weight:400">Don't send into Telegram and other messaging chats</label></div>
-  <div class="row"><input id="spoken" type="checkbox"><label for="spoken" style="margin:0;font-weight:400">Ask Hermes for spoken replies (when supported)</label></div>
-  <p>Off by default. Sends a spoken-reply preference only when the Hermes dashboard advertises protocol 2; otherwise sends a normal text-only prompt.</p>
+  <div class="row"><input id="voice" type="checkbox"><label for="voice" style="margin:0;font-weight:400">Reply with voice</label></div>
+  <p>Hermes speaks its reply to each message you dictate, like <code>/voice</code>, and Wristbound offers Play. Other messages in the chat stay text. Needs the wristbound-voice plugin on your Hermes; without it, messages are sent as text.</p>
   <h2>Account</h2>
   <p id="who"></p>
   <button id="disconnect" class="secondary">Sign out</button>
@@ -92,7 +92,7 @@
     if (!signedIn) return;
     $('who').textContent = 'Signed in to ' + status.base + (status.username ? ' as ' + status.username : ' with a session token') + '.';
     $('readonly').checked = !!status.messagingReadOnly;
-    $('spoken').checked = !!status.spokenReplies;
+    $('voice').checked = !!status.voiceReplies;
     var select = $('destination');
     function setDestination(sessions) {
       select.length = builtInDestinations;
@@ -151,8 +151,8 @@
   $('readonly').addEventListener('change', function () {
     send({ type: 'messagingReadOnly', value: $('readonly').checked }).then(function () { say('Saved.'); }).catch(function (e) { say(e.message, true); });
   });
-  $('spoken').addEventListener('change', function () {
-    send({ type: 'spokenReplies', value: $('spoken').checked }).then(function () { say('Saved.'); }).catch(function (e) { say(e.message, true); });
+  $('voice').addEventListener('change', function () {
+    send({ type: 'voiceReplies', value: $('voice').checked }).then(function () { say('Saved.'); }).catch(function (e) { say(e.message, true); });
   });
   Pebble.addEventListener('ready', function (e) {
     if (e.target !== 'plugin') return;

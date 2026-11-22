@@ -106,7 +106,10 @@ data class HermesMessage(
     val display_kind: String? = null,
     /** Hermes' display data for that row; a delegation's completion names its `delegation_id` here. */
     val display_metadata: JsonElement? = null,
+    /** Voice clips for this exact reply, from the wristbound-voice Hermes plugin (merged in by the client). */
     val audio_attachments: List<AudioAttachment> = emptyList(),
+    /** The plugin is still speaking this reply: its clip should follow within seconds. */
+    val audio_pending: Boolean = false,
 ) {
     /**
      * A user row Hermes wrote to start a turn of its own (a background process finished, a
@@ -173,7 +176,7 @@ data class HermesMessage(
      * path is Hermes' answer or the user's own recording is decided per turn by
      * `SessionMapper.replies`, not here.
      *
-     * Automatic voice uses typed attachments on the exact assistant row, separately from tags.
+     * Voice replies from the wristbound-voice plugin are [audio_attachments] instead, separately from tags.
      */
     val audioRefs: List<String>
         get() = AUDIO_TAG.findAll(text.replace("\\/", "/"))
@@ -198,8 +201,27 @@ private val AUDIO_TAG = Regex(
 data class MessageList(
     val session_id: String? = null,
     val messages: List<HermesMessage> = emptyList(),
-    val audio_messages: List<HermesMessage> = emptyList(),
 )
+
+/**
+ * `GET /api/plugins/wristbound-voice/sessions/{id}/replies`: the voice replies the plugin made
+ * (or is making) in one session, newest first. See hermes-plugin/README.md.
+ */
+@Serializable
+data class VoiceReplyList(val replies: List<VoiceReply> = emptyList())
+
+@Serializable
+data class VoiceReply(
+    val turn_id: String,
+    /** The assistant row the voice belongs to; null for a moment while the turn finishes. */
+    val message_id: String? = null,
+    /** `pending`, `ready` or `failed`. */
+    val status: String,
+    val created_at: Double = 0.0,
+    val clips: List<AudioAttachment> = emptyList(),
+) {
+    val pending: Boolean get() = status == "pending"
+}
 
 /** `GET /api/status`: whether the dashboard requires sign-in, and which flows it offers. */
 @Serializable

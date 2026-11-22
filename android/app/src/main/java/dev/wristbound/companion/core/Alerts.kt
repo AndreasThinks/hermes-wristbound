@@ -110,12 +110,27 @@ class ReplyAlerts(
     /** Every first decision, for the setup screen's list of recent alerts. */
     private val log: (AlertRecord) -> Unit = {},
     private val now: () -> Long = System::currentTimeMillis,
+    /** How long a reply whose voice is still being made may wait for it before alerting as text. */
+    private val voiceWaitMs: Long = VOICE_WAIT_MS,
     private val deliver: suspend (ReplyAlert) -> Boolean,
 ) {
     /** Failed deliveries per reply id, in memory: a restart gets a fresh set of attempts. */
     private val failures = object : LinkedHashMap<String, Int>() {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Int>?) = size > 100
     }
+
+    /** When each reply was first held back for its voice, in memory. */
+    private val waitingSince = object : LinkedHashMap<String, Long>() {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?) = size > 100
+    }
+
+    /**
+     * True after a [poll] that held a reply back because its voice (asked for with "Reply with
+     * voice") is still being made. The caller polls again shortly; nothing in Hermes signals the
+     * clip, so without that the alert would wait for the next unrelated change.
+     */
+    @Volatile var waitingForVoice: Boolean = false
+        private set
 
     /**
      * A turn sent from the watch ended in [session]: alert its reply, if the policy allows.
@@ -147,6 +162,7 @@ class ReplyAlerts(
         }
         val cursors = saved.sessions.toMutableMap()
         val moved = mutableSetOf<String>()
+        var waiting = false
         try {
             for (session in sessions) {
                 val floor = cursors[session.id] ?: saved.since
@@ -161,14 +177,37 @@ class ReplyAlerts(
                     continue
                 }
                 var delivered = true
-                for (reply in SessionMapper.replies(messages)) delivered = consider(session, reply, floor, watchTurn = false) && delivered
+                for (reply in SessionMapper.replies(messages)) {
+                    if (holdForVoice(reply)) {
+                        // Not decided yet: the checkpoint holds and the next pass looks again.
+                        waiting = true
+                        delivered = false
+                        continue
+                    }
+                    delivered = consider(session, reply, floor, watchTurn = false) && delivered
+                }
                 // An alert that reached nobody keeps the checkpoint, so the next pass retries it.
                 if (delivered) cursors[session.id] = session.activity
             }
         } finally {
             store.pollCursors = PollCursors(saved.since, bounded(cursors))
+            waitingForVoice = waiting
         }
         return moved
+    }
+
+    /**
+     * Whether to hold back the first alert for [reply] because Hermes is still speaking it. A
+     * voice reply then alerts once, already offering Play, instead of buzzing for the text and
+     * gaining audio later. After [voiceWaitMs] it alerts as text; its audio still lands in history.
+     */
+    private fun holdForVoice(reply: SessionMapper.Reply): Boolean {
+        if (!reply.message.audio_pending || reply.hasAudio || store.isAlerted(reply.id) || !policy().enabled) {
+            synchronized(waitingSince) { waitingSince.remove(reply.id) }
+            return false
+        }
+        val since = synchronized(waitingSince) { waitingSince.getOrPut(reply.id) { now() } }
+        return now() - since < voiceWaitMs
     }
 
     /**
@@ -246,6 +285,8 @@ class ReplyAlerts(
         /** A user row sent from the watch, by stable id. */
         const val WATCH_ROW_PREFIX = "watch-row:"
         const val MAX_ATTEMPTS = 5
+        /** See [holdForVoice]. Hermes' TTS usually takes 2 to 8 seconds for a short reply. */
+        const val VOICE_WAIT_MS = 20_000L
         private const val EPSILON = 0.001
         private const val MAX_CURSORS = 200
     }
