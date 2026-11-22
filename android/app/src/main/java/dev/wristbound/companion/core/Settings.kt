@@ -73,6 +73,11 @@ class Settings(context: Context) : BoundCredentialStore {
         get() = prefs.getInt("quick_launch", -1).takeIf { it >= 0 }
         set(v) = prefs.edit().apply { if (v == null) remove("quick_launch") else putInt("quick_launch", v) }.apply()
 
+    /** The Quick Launch choice the watch last acknowledged holding, or null if unknown. */
+    var quickLaunchOnWatch: Int?
+        get() = prefs.getInt("quick_launch_on_watch", -1).takeIf { it >= 0 }
+        set(v) = prefs.edit().apply { if (v == null) remove("quick_launch_on_watch") else putInt("quick_launch_on_watch", v) }.apply()
+
     /** Show chats from Telegram and other messaging platforms on the watch. */
     var showMessaging: Boolean
         get() = prefs.getBoolean("include_telegram", true)
