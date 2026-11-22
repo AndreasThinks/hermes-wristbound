@@ -1,0 +1,291 @@
+name: Release
+
+# Publishing a GitHub release builds every part from the release tag and publishes it:
+#   - watch app and Index plugin PBWs, the Android companion APK, the voice plugin zip and
+#     SHA256SUMS are attached to the release (replacing any uploaded by hand);
+#   - the watch app and the Index plugin go to the Pebble Store when the Store does not list
+#     their version yet (never for prereleases; manual runs only when asked);
+#   - the website is redeployed from main.
+# Run it by hand with a tag to rebuild and re-attach an existing release.
+# docs/RELEASING.md lists the secrets this needs and the steps that stay manual.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build, for example v0.6.13
+        required: true
+      publish_store:
+        description: Also publish to the Pebble Store any app version it does not list yet
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  versions:
+    runs-on: ubuntu-latest
+    outputs:
+      watch: ${{ steps.read.outputs.watch }}
+      plugin: ${{ steps.read.outputs.plugin }}
+      android: ${{ steps.read.outputs.android }}
+      voice: ${{ steps.read.outputs.voice }}
+      watch_publish: ${{ steps.read.outputs.watch_publish }}
+      plugin_publish: ${{ steps.read.outputs.plugin_publish }}
+      store: ${{ steps.read.outputs.store }}
+    steps:
+      # The release source is the tag; the planner comes from this workflow's own commit, so a
+      # tag made before the planner existed can still be rebuilt by a manual run.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+          path: release
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: tooling
+          sparse-checkout: .github/scripts
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Release plan tests
+        working-directory: tooling/.github/scripts
+        run: |
+          pip install pytest
+          python -m pytest -q test_release_plan.py
+      # The release event carries its own prerelease flag; a manual run asks GitHub, so a
+      # rebuild of a prerelease can never reach the Store.
+      - name: Read the release's prerelease status
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -eu
+          if [ "$GITHUB_EVENT_NAME" = release ]; then
+            pre="$EVENT_PRERELEASE"
+          else
+            pre=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)
+          fi
+          echo "Prerelease: $pre"
+          echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
+      # Asks the Pebble Store which versions it already lists, so a release whose Store job
+      # failed or was skipped, or a promoted prerelease, still gets published.
+      - name: Read versions and plan the Store releases
+        id: read
+        env:
+          PUBLISH_STORE: ${{ github.event_name == 'release' || inputs.publish_store }}
+        run: >-
+          python tooling/.github/scripts/release_plan.py "$TAG"
+          "${{ steps.release.outputs.prerelease }}" "$PUBLISH_STORE" release
+
+  watch:
+    needs: versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      - uses: astral-sh/setup-uv@v6
+      - name: Install Pebble SDK
+        run: |
+          uv tool install pebble-tool
+          yes | pebble sdk install latest
+      - name: Build watchapp
+        working-directory: watch
+        run: |
+          pebble build
+          mkdir -p ../dist
+          cp build/watch.pbw "../dist/wristbound-watch-v${{ needs.versions.outputs.watch }}.pbw"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-watch
+          path: dist/
+
+  index-plugin:
+    needs: versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: astral-sh/setup-uv@v6
+      - name: Install Pebble SDK
+        run: |
+          uv tool install pebble-tool
+          yes | pebble sdk install latest
+      - name: Unit tests
+        working-directory: pebble-plugin
+        run: node --test test/*.test.js
+      - name: Build plugin
+        working-directory: pebble-plugin
+        run: |
+          pebble build
+          mkdir -p ../dist
+          cp build/pebble-plugin.pbw "../dist/hermes-index-plugin-v${{ needs.versions.outputs.plugin }}.pbw"
+      # The same plugin-host run as build.yml, against the exact PBW that gets attached.
+      - name: Run in the Pebble plugin host against a scripted Hermes
+        working-directory: pebble-plugin
+        run: |
+          NO_PROXY='*' "$(dirname "$(readlink -f "$(which pebble)")")/python" tools/emulator_e2e.py \
+            "../dist/hermes-index-plugin-v${{ needs.versions.outputs.plugin }}.pbw"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-index-plugin
+          path: dist/
+
+  android:
+    needs: versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      # Published APKs are debug builds signed with one fixed debug key, so each one installs
+      # over the last. A runner's own fresh debug key would make the APK refuse to update.
+      - name: Restore the release signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::Secret ANDROID_DEBUG_KEYSTORE_B64 is not set. See docs/RELEASING.md."
+            exit 1
+          fi
+          mkdir -p ~/.android
+          echo "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+      - name: Install SDK platform
+        run: |
+          SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -1)
+          yes | "$SDKMANAGER" "platforms;android-37.0" "build-tools;37.0.0" > /dev/null
+          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+      - name: Test and build
+        working-directory: android
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+      - name: Check the signing certificate
+        env:
+          EXPECTED: ${{ vars.ANDROID_CERT_SHA256 }}
+        run: |
+          set -eu
+          apk=$(ls android/app/build/outputs/apk/debug/*.apk | head -1)
+          cert=$("$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --print-certs "$apk" \
+            | sed -n 's/.*certificate SHA-256 digest: //p' | head -1)
+          echo "APK signing certificate SHA-256: $cert"
+          # Fail closed: an APK signed with any other key cannot update existing installs.
+          want=$(printf '%s' "${EXPECTED:-}" | tr -d ': ' | tr 'A-F' 'a-f')
+          if ! printf '%s' "$want" | grep -Eqx '[0-9a-f]{64}'; then
+            echo "::error::Repository variable ANDROID_CERT_SHA256 is missing or not a SHA-256 fingerprint. See docs/RELEASING.md."
+            exit 1
+          fi
+          if [ "$cert" != "$want" ]; then
+            echo "::error::APK certificate $cert does not match ANDROID_CERT_SHA256 $want."
+            exit 1
+          fi
+          mkdir -p dist
+          cp "$apk" "dist/wristbound-companion-v${{ needs.versions.outputs.android }}-debug.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-android
+          path: dist/
+
+  voice-plugin:
+    needs: versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Unit tests
+        working-directory: hermes-plugin
+        run: |
+          pip install pytest fastapi httpx
+          python -m pytest -q tests
+      - name: Package
+        working-directory: hermes-plugin
+        run: |
+          mkdir -p ../dist
+          find wristbound-voice -name __pycache__ -prune -exec rm -rf {} +
+          zip -qr "../dist/wristbound-voice-v${{ needs.versions.outputs.voice }}.zip" wristbound-voice
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-voice-plugin
+          path: dist/
+
+  attach:
+    needs: [watch, index-plugin, android, voice-plugin]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Attach builds to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$TAG" * --clobber --repo "$GITHUB_REPOSITORY"
+
+  store-watch:
+    needs: [versions, attach]
+    permissions:
+      contents: read
+      id-token: write
+    if: needs.versions.outputs.store == 'true' && needs.versions.outputs.watch_publish == 'true'
+    uses: ./.github/workflows/pebble-store.yml
+    with:
+      tag: ${{ github.event.release.tag_name || inputs.tag }}
+      project: watch
+      artifact: release-watch
+      pbw: wristbound-watch-v${{ needs.versions.outputs.watch }}.pbw
+    secrets: inherit
+
+  store-index-plugin:
+    needs: [versions, attach]
+    permissions:
+      contents: read
+      id-token: write
+    if: needs.versions.outputs.store == 'true' && needs.versions.outputs.plugin_publish == 'true'
+    uses: ./.github/workflows/pebble-store.yml
+    with:
+      tag: ${{ github.event.release.tag_name || inputs.tag }}
+      project: pebble-plugin
+      artifact: release-index-plugin
+      pbw: hermes-index-plugin-v${{ needs.versions.outputs.plugin }}.pbw
+    secrets: inherit
+
+  website:
+    needs: attach
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Redeploy the website from main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --ref main --repo "$GITHUB_REPOSITORY"
