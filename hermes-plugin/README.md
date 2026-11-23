@@ -1,5 +1,7 @@
 # Hermes Wristbound: voice plugin
 
+[Wristbound website and setup guide](https://andreasthinks.github.io/hermes-wristbound/)
+
 *One of the three parts of [Hermes Wristbound](../README.md): the part that runs on your Hermes host. Plugin name `wristbound-voice`.*
 
 With **Reply with voice** on in the Index plugin, Hermes answers each message you dictate with a

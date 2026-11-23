@@ -64,7 +64,7 @@ jobs:
         run: |
           set -eu
           notes=$(gh release view "${{ inputs.tag }}" --repo "$GITHUB_REPOSITORY" --json name,url \
-            --jq '"\(.name). Release notes: \(.url)"')
+            --jq '"\(.name). Release notes: \(.url). Website and setup: https://andreasthinks.github.io/hermes-wristbound/"')
           pebble publish --non-interactive --is-published \
             --pbw "../dist/${{ inputs.pbw }}" \
             --release-notes "$notes"
