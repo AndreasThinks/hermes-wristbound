@@ -1,5 +1,7 @@
 # Hermes Wristbound: Index plugin
 
+[Wristbound website and setup guide](https://andreasthinks.github.io/hermes-wristbound/)
+
 *One of the three parts of [Hermes Wristbound](../README.md). Listed in the Pebble Store as **Hermes for Index**, and shown in Index as **Hermes**. Experimental.*
 
 A [Pebble plugin](https://developer.repebble.com/guides/plugins/preview/) that makes Hermes an

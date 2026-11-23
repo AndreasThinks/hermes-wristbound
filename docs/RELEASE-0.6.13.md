@@ -1,5 +1,7 @@
 # Hermes Wristbound v0.6.13: wrist-safe approvals, reliable sends, exact voice replies
 
+[Wristbound website and setup guide](https://andreasthinks.github.io/hermes-wristbound/)
+
 Android companion 0.6.13 (versionCode 19), Index plugin 0.1.8 and voice plugin 0.2.0. The watch app is unchanged (0.6.8), and so are protocol v5 and the watch UUID. This is the first release built and published by the release workflow ([Releasing](RELEASING.md)).
 
 ## Android companion 0.6.13

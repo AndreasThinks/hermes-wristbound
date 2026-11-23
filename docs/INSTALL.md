@@ -1,5 +1,7 @@
 # Install Hermes Wristbound
 
+[Wristbound website and setup guide](https://andreasthinks.github.io/hermes-wristbound/)
+
 Hermes Wristbound connects a Pebble watch and the Index ring to **your own Hermes Agent**. It is not a standalone watch chatbot and does not provide a hosted Hermes account. It has three parts; install the ones you want:
 
 | You want | Install | Sections |
