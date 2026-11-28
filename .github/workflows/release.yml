@@ -54,7 +54,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: tooling
-          sparse-checkout: .github/scripts
+          sparse-checkout: .github
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -62,7 +62,7 @@ jobs:
         working-directory: tooling/.github/scripts
         run: |
           pip install pytest
-          python -m pytest -q test_release_plan.py
+          python -m pytest -q test_release_plan.py test_release_signing.py
       # The release event carries its own prerelease flag; a manual run asks GitHub, so a
       # rebuild of a prerelease can never reach the Store.
       - name: Read the release's prerelease status
@@ -168,8 +168,11 @@ jobs:
             echo "::error::Secret ANDROID_DEBUG_KEYSTORE_B64 is not set. See docs/RELEASING.md."
             exit 1
           fi
-          mkdir -p ~/.android
-          echo "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+          # Do not rely on AGP's debug-key discovery on the runner image.
+          # Keep the restored key private and pass this exact file to Gradle.
+          umask 077
+          mkdir -p "$RUNNER_TEMP/wristbound-signing"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/wristbound-signing/debug.keystore"
       - name: Install SDK platform
         run: |
           SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -1)
@@ -177,7 +180,12 @@ jobs:
           echo "sdk.dir=$ANDROID_HOME" > android/local.properties
       - name: Test and build
         working-directory: android
-        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+        run: >-
+          ./gradlew --no-daemon testDebugUnitTest assembleDebug
+          -Pandroid.injected.signing.store.file="$RUNNER_TEMP/wristbound-signing/debug.keystore"
+          -Pandroid.injected.signing.store.password=android
+          -Pandroid.injected.signing.key.alias=androiddebugkey
+          -Pandroid.injected.signing.key.password=android
       - name: Check the signing certificate
         env:
           EXPECTED: ${{ vars.ANDROID_CERT_SHA256 }}

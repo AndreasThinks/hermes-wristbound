@@ -95,4 +95,4 @@ jobs:
         working-directory: .github/scripts
         run: |
           pip install pytest
-          python -m pytest -q test_release_plan.py
+          python -m pytest -q test_release_plan.py test_release_signing.py
