@@ -29,7 +29,7 @@ dashboard as the companion ([docs/HERMES_API.md](../docs/HERMES_API.md)).
 | **A new Hermes session** | Starts a separate conversation for every capture. Existing installations keep their saved choice. |
 | **A named chat in Settings** | Sends to that chat until you change the setting. |
 
-To start fresh from Index, lead with **“New Hermes session, then …”** and say your message. The plugin removes the command before sending if the transcript preserves it. Mentioning a new session later in the message does not switch chats. You can also name a chat for a one-off send; using Latest can then follow that chat if it becomes the most recently active. Latest skips archived, hidden and automation chats, and respects **Don't send into Telegram and other messaging chats**.
+To start fresh from Index, lead with **“New Hermes session, then …”** and say your message. The plugin removes the command before sending if the transcript preserves it. You can change the phrase under **Phrase that starts a new session** in Settings, for example to “Fresh start” if Index transcribes that more reliably; punctuation between its words and a following “then” are optional, case does not matter, and clearing the box restores the default. Mentioning a new session later in the message does not switch chats. You can also name a chat for a one-off send; using Latest can then follow that chat if it becomes the most recently active. Latest skips archived, hidden and automation chats, and respects **Don't send into Telegram and other messaging chats**.
 
 ## Reply with voice
 

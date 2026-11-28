@@ -204,6 +204,39 @@ test('spoken fresh-session prefix overrides the default and is not forwarded', a
   ]);
 });
 
+test('the fresh-session phrase can be changed in settings, and cleared back to the default', async () => {
+  let created = 0;
+  const f = fixture({ gateway: { 'session.create': () => {
+    created++;
+    return { session_id: 'rt-new-' + created, stored_session_id: 's-new-' + created };
+  } } });
+  await f.signIn();
+  await f.service.config({ type: 'destination', destination: 'ongoing' });
+  const send = (message, chat_id) => f.service.action({ action: 'send_to_agent', args: { message, chat_id } });
+  assert.equal((await f.service.config({ type: 'status' })).freshPhrase, 'New Hermes session');
+  const saved = await f.service.config({ type: 'freshPhrase', value: '  Fresh   start, ' });
+  assert.equal(saved.freshPhrase, 'Fresh start');
+  await send('Start here');
+  assert.equal((await send('fresh start. Then plan the week')).session_id, 's-new-2');
+  assert.equal((await send('New Hermes session, then stays put')).session_id, 's-new-2');
+  await assert.rejects(send('Fresh start!'), /Say a message after “Fresh start”/);
+  await assert.rejects(f.service.config({ type: 'freshPhrase', value: '?!' }), /at least one letter/);
+  await assert.rejects(f.service.config({ type: 'freshPhrase', value: 'x'.repeat(61) }), /60 characters/);
+  assert.equal((await f.service.config({ type: 'status' })).freshPhrase, 'Fresh start');
+  assert.equal((await f.service.config({ type: 'freshPhrase', value: ' ' })).freshPhrase, 'New Hermes session');
+  assert.equal((await send('New Hermes session: one more')).session_id, 's-new-3');
+  assert.deepEqual(f.socketLog.filter(x => x.method === 'prompt.submit').map(x => x.params.text), [
+    'Start here', 'plan the week', 'New Hermes session, then stays put', 'one more',
+  ]);
+});
+
+test('a phrase with pattern characters matches literally', () => {
+  const { freshPattern } = require(path.join(__dirname, '../src/plugin/index.js'));
+  assert.ok(freshPattern('Hey (Hermes)+').test('hey (hermes)+ then go'));
+  assert.ok(!freshPattern('Hey (Hermes)+').test('hey hermes then go'));
+  assert.ok(!freshPattern('Hermes new').test('Hermes newer plan'));
+});
+
 test('an uncertain fresh send keeps the ongoing destination, without replay', async () => {
   let created = 0;
   const f = fixture({ gateway: {

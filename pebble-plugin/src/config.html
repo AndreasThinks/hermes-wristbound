@@ -69,7 +69,9 @@
   <label for="destination">When no chat is named, send to</label>
   <select id="destination"><option value="new">A new Hermes session</option><option value="ongoing">Continue my Index conversation</option><option value="latest">Most recently active Hermes conversation</option></select>
   <p id="destination-help"></p>
-  <p>To start fresh from Index, say “New Hermes session, then …” followed by your message. Name a chat to send there once.</p>
+  <label for="fresh-phrase">Phrase that starts a new session</label>
+  <input id="fresh-phrase" maxlength="60" autocapitalize="sentences" placeholder="New Hermes session">
+  <p id="fresh-help">To start fresh from Index, say “New Hermes session, then …” followed by your message. Name a chat to send there once.</p>
   <div class="row"><input id="readonly" type="checkbox"><label for="readonly" style="margin:0;font-weight:400">Don't send into Telegram and other messaging chats</label></div>
   <div class="row"><input id="voice" type="checkbox"><label for="voice" style="margin:0;font-weight:400">Reply with voice</label></div>
   <p>Hermes speaks its reply to each message you dictate, like <code>/voice</code>, and the Wristbound watch app offers Play. Other messages in the chat stay text. Needs the Hermes Wristbound voice plugin (<code>wristbound-voice</code>) on your Hermes; without it, messages are sent as text.</p>
@@ -98,6 +100,14 @@
       : value === 'new' ? 'Starts a separate conversation for each capture.'
       : 'Sends to this specific conversation until you change the setting.';
   }
+  function showFreshPhrase(status) {
+    var phrase = status.freshPhrase || status.defaultFreshPhrase || 'New Hermes session';
+    $('fresh-phrase').value = phrase;
+    if (status.defaultFreshPhrase) $('fresh-phrase').placeholder = status.defaultFreshPhrase;
+    $('fresh-help').textContent = 'To start fresh from Index, say “' + phrase + ', then …” followed by your message. ' +
+      'Pick words you would not start an ordinary message with. Clear the box to go back to “' +
+      (status.defaultFreshPhrase || 'New Hermes session') + '”. Name a chat to send there once.';
+  }
   function show(status) {
     var signedIn = status && status.signedIn;
     $('signin').classList.toggle('hidden', !!signedIn);
@@ -108,6 +118,7 @@
     $('who').textContent = 'Signed in to ' + status.base + (status.username ? ' as ' + status.username : ' with a session token') + '.';
     $('readonly').checked = !!status.messagingReadOnly;
     $('voice').checked = !!status.voiceReplies;
+    showFreshPhrase(status);
     var select = $('destination');
     function setDestination(sessions) {
       select.length = builtInDestinations;
@@ -168,6 +179,11 @@
   });
   $('voice').addEventListener('change', function () {
     send({ type: 'voiceReplies', value: $('voice').checked }).then(function () { say('Saved.'); }).catch(function (e) { say(e.message, true); });
+  });
+  $('fresh-phrase').addEventListener('change', function () {
+    send({ type: 'freshPhrase', value: $('fresh-phrase').value })
+      .then(function (status) { showFreshPhrase(status); say('Saved.'); })
+      .catch(function (e) { say(e.message, true); return send({ type: 'status' }).then(showFreshPhrase).catch(function () {}); });
   });
   Pebble.addEventListener('ready', function (e) {
     if (e.target !== 'plugin') return;

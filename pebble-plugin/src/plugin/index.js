@@ -24,6 +24,27 @@ var TIMEOUTS = { ready: 10000, call: 15000, submit: 20000 };
 var VOICE_PLUGIN = 'wristbound-voice';
 var MESSAGING_SOURCES = ['telegram', 'discord', 'slack', 'whatsapp', 'signal', 'matrix', 'email', 'sms'];
 var NEW = ['new', 'new session', 'new chat', 'new task'];
+// The spoken command that starts a fresh session when it leads a capture. Settings can change it.
+var DEFAULT_FRESH_PHRASE = 'New Hermes session';
+var MAX_FRESH_PHRASE = 60;
+var PHRASE_GAP = '[\\s,.:;!?]+'; // transcripts vary the punctuation between spoken words
+
+// A tidy phrase from settings input, or null when it cannot work as a command.
+function cleanFreshPhrase(value) {
+  var words = String(value == null ? '' : value).split(/[\s,.:;!?]+/).filter(Boolean);
+  var phrase = words.join(' ');
+  if (!phrase || phrase.length > MAX_FRESH_PHRASE || !/[A-Za-z0-9\u00c0-\uffff]/.test(phrase)) return null;
+  return phrase;
+}
+
+// Matches the phrase at the start of a message, then an optional "then", up to the message itself.
+function freshPattern(phrase) {
+  var words = (cleanFreshPhrase(phrase) || DEFAULT_FRESH_PHRASE).split(' ').map(function (w) {
+    return w.replace(/[.*+?^${}()|[\]\\\/-]/g, '\\$&');
+  });
+  return new RegExp('^' + words.join(PHRASE_GAP) +
+    '(?:(?:\\s*[,:.!?;]\\s*(?:then\\b\\s*[,:;]?\\s*)?)|\\s+then\\b\\s*[,:;]?\\s*|$)', 'i');
+}
 
 function PluginError(code, message) {
   var error = new Error(message);
@@ -539,10 +560,11 @@ function createService(env) {
     if (!message) throw PluginError('INVALID_ARGS', 'Nothing to send');
     if (message.length > MAX_MESSAGE) throw PluginError('INVALID_ARGS', 'That message is too long for Hermes from the watch');
     // Index can leave this spoken command in the transcript instead of setting chat_id.
-    var fresh = /^new\s+hermes\s+session(?:(?:\s*[,:.!?;]\s*(?:then\b\s*[,:;]?\s*)?)|\s+then\b\s*[,:;]?\s*|$)/i.exec(message);
+    var phrase = cleanFreshPhrase(settings().freshPhrase) || DEFAULT_FRESH_PHRASE;
+    var fresh = freshPattern(phrase).exec(message);
     if (fresh) {
       message = message.slice(fresh[0].length).trim();
-      if (!message) throw PluginError('INVALID_ARGS', 'Say a message after “New Hermes session”');
+      if (!message) throw PluginError('INVALID_ARGS', 'Say a message after “' + phrase + '”');
     }
     var startPrefs = settings();
     var target = await resolveTarget(fresh ? 'new' : args && args.chat_id);
@@ -703,6 +725,7 @@ function createService(env) {
       username: current && current.username || null,
       destination: s.destination || 'new', ongoingSessionId: s.ongoingSessionId || null, messagingReadOnly: !!s.messagingReadOnly,
       voiceReplies: !!s.voiceReplies,
+      freshPhrase: cleanFreshPhrase(s.freshPhrase) || DEFAULT_FRESH_PHRASE, defaultFreshPhrase: DEFAULT_FRESH_PHRASE,
     };
   }
 
@@ -759,6 +782,16 @@ function createService(env) {
       writeLocal(SETTINGS, Object.assign(settings(), { voiceReplies: !!message.value }));
       return status();
     }
+    if (type === 'freshPhrase') {
+      // Blank restores the default, so the setting can always be put back.
+      var blank = !String(message.value == null ? '' : message.value).trim();
+      var phrase = blank ? DEFAULT_FRESH_PHRASE : cleanFreshPhrase(message.value);
+      if (!phrase) throw PluginError('INVALID_ARGS', 'Use up to ' + MAX_FRESH_PHRASE + ' characters, with at least one letter or number');
+      var saved = settings();
+      if (phrase === DEFAULT_FRESH_PHRASE) delete saved.freshPhrase; else saved.freshPhrase = phrase;
+      writeLocal(SETTINGS, saved);
+      return status();
+    }
     throw PluginError('INVALID_REQUEST', 'Unknown settings message');
   }
 
@@ -791,5 +824,5 @@ if (typeof Pebble !== 'undefined' && Pebble.registerActionHandler) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { createService: createService, normaliseBase: normaliseBase, sha256: sha256, base64Url: base64Url, cookieHeader: cookieHeader, setCookies: setCookies };
+  module.exports = { createService: createService, freshPattern: freshPattern, normaliseBase: normaliseBase, sha256: sha256, base64Url: base64Url, cookieHeader: cookieHeader, setCookies: setCookies };
 }
