@@ -80,7 +80,7 @@ Every part shares one look, **Phosphor**: black glass, **green `#00FFAA`** for a
 
 ## Status
 
-**Experimental.** Current versions in this repository: watch app 0.6.8, Android companion 0.6.13, Index plugin 0.1.8, voice plugin 0.2.0. Session browsing, replies and phone/headphone playback have been used on a Pixel 9a with Hermes 0.22.2 and a Pebble Time 2; the Index plugin has been used on a Pixel with Index. Newer paths (native notification actions, live updates, voice replies, watch-speaker playback) pass automated and emulator tests and still need hardware checks, listed in [Testing](docs/TESTING.md). The companion is a sideloaded APK, not a Play Store app, and there is no iOS companion. Release notes are in [docs/](docs/); [Releasing](docs/RELEASING.md) covers how a GitHub release builds and publishes every part.
+**Experimental.** Current versions in this repository: watch app 0.6.8, Android companion 0.6.14, Index plugin 0.1.9, voice plugin 0.2.0. Session browsing, replies and phone/headphone playback have been used on a Pixel 9a with Hermes 0.22.2 and a Pebble Time 2; the Index plugin has been used on a Pixel with Index. Newer paths (native notification actions, live updates, voice replies, watch-speaker playback) pass automated and emulator tests and still need hardware checks, listed in [Testing](docs/TESTING.md). The companion is a sideloaded APK, not a Play Store app, and there is no iOS companion. Release notes are in [docs/](docs/); [Releasing](docs/RELEASING.md) covers how a GitHub release builds and publishes every part.
 
 ## Develop
 

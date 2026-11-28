@@ -1,7 +1,7 @@
 {
   "name": "hermes-wristbound-plugin",
   "author": "Hermes Wristbound",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "private": true,
   "scripts": {
     "test": "node --test test/*.test.js"
@@ -96,7 +96,7 @@
       "actions": [
         {
           "name": "send_to_agent",
-          "description": "Send a message to Hermes. Omit chat_id to follow settings; Continue my Index conversation resumes the saved persistent Hermes session (first send creates it). chat_id \"new\" starts a fresh conversation; a named target is one-off. Preserve a leading New Hermes session, then command in the message if not routing explicitly. Never retry automatically after uncertain delivery.",
+          "description": "Send a message to Hermes. Omit chat_id to follow settings; Continue my Index conversation resumes the saved persistent Hermes session (first send creates it). chat_id \"new\" starts a fresh conversation; a named target is one-off. Preserve a leading new-session command (by default New Hermes session, then; the user can change it in settings) in the message if not routing explicitly. Never retry automatically after uncertain delivery.",
           "parameters": {
             "type": "object",
             "properties": {
