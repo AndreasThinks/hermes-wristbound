@@ -13,6 +13,8 @@ Publishing a GitHub release runs [`.github/workflows/release.yml`](../.github/wo
 
 Files attached to the release by hand are replaced by the CI builds of the same name.
 
+Release signing restores the fixed debug keystore into a private runner-temporary directory and passes its exact path, alias and standard debug passwords to Gradle with `android.injected.signing.*` properties. It does not depend on the runner's Android home or Gradle's automatic debug-key discovery. The final APK certificate check remains mandatory. A signing failure blocks all asset attachment and therefore the Store and website jobs; a published GitHub release with no assets is not a completed release.
+
 The Store decision reads the live listings (`appstore-api.repebble.com`), not the previous tag, so a version whose earlier Store job failed or was skipped, or that first shipped as a prerelease, is published by the next release that carries it. If the Store cannot be read, the run fails rather than guess. The logic and its tests are in `.github/scripts/release_plan.py`.
 
 ## Cutting a release
